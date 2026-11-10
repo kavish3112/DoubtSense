@@ -1,0 +1,6 @@
+{
+  "name": "DoubtSense",
+  "description": "AI-powered doubt detection and answering application with live speech listening and intelligent context analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
