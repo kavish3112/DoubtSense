@@ -1,0 +1,146 @@
+{
+  "entities": {
+    "DoubtBackup": {
+      "title": "DoubtBackup",
+      "description": "Cloud-synced doubt item backed up from the local Room database for a user.",
+      "type": "object",
+      "properties": {
+        "localId": {
+          "type": "integer",
+          "description": "Original Room database row ID on the client device."
+        },
+        "query": {
+          "type": "string",
+          "description": "The spoken or typed doubt question."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Resolved AI summary or explanation."
+        },
+        "oneSentenceSummary": {
+          "type": "string",
+          "description": "Optional single-sentence summary for quick list scanning."
+        },
+        "category": {
+          "type": "string",
+          "description": "High-level subject category."
+        },
+        "customTag": {
+          "type": "string",
+          "description": "User-assigned custom label such as Work, Education, or Personal."
+        },
+        "timestamp": {
+          "type": "integer",
+          "description": "Epoch milliseconds when the doubt was recorded locally."
+        },
+        "isResolved": {
+          "type": "boolean",
+          "description": "Whether the doubt has been resolved."
+        },
+        "isStarred": {
+          "type": "boolean",
+          "description": "Whether the user pinned or favorited this doubt."
+        },
+        "confidenceScore": {
+          "type": "number",
+          "description": "Confidence score between 0.0 and 1.0."
+        },
+        "followUpCount": {
+          "type": "integer",
+          "description": "Count of follow-up questions."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on mutation."
+        }
+      },
+      "required": [
+        "localId",
+        "query",
+        "summary",
+        "category",
+        "timestamp",
+        "isResolved",
+        "isStarred",
+        "confidenceScore",
+        "followUpCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SessionBackup": {
+      "title": "SessionBackup",
+      "description": "Cloud-synced Answer Engine conversation session backed up from Room.",
+      "type": "object",
+      "properties": {
+        "localId": {
+          "type": "integer",
+          "description": "Original Room session row ID."
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the conversation session."
+        },
+        "answerJson": {
+          "type": "string",
+          "description": "Serialized AnswerEngineResult payload."
+        },
+        "customTag": {
+          "type": "string",
+          "description": "User-assigned custom tag label."
+        },
+        "category": {
+          "type": "string",
+          "description": "Session category."
+        },
+        "isPinned": {
+          "type": "boolean",
+          "description": "Whether the session is pinned/favorited."
+        },
+        "timestamp": {
+          "type": "integer",
+          "description": "Epoch milliseconds when the session was saved."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp() on mutation."
+        }
+      },
+      "required": [
+        "localId",
+        "title",
+        "answerJson",
+        "isPinned",
+        "timestamp",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/doubts/{doubtId}": {
+      "schema": {
+        "$ref": "#/entities/DoubtBackup"
+      },
+      "description": "Per-user backed up DoubtItem records isolated by Firebase Auth UID."
+    },
+    "/users/{userId}/sessions/{sessionId}": {
+      "schema": {
+        "$ref": "#/entities/SessionBackup"
+      },
+      "description": "Per-user backed up ConversationSession records isolated by Firebase Auth UID."
+    }
+  }
+}

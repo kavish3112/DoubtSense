@@ -26,14 +26,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeviceThermostat
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.QuestionAnswer
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Tune
+import com.example.util.ExternalReferenceHelper
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -55,6 +59,7 @@ import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,10 +71,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.model.DoubtItem
 import com.example.service.ListeningStateManager
 import com.example.ui.theme.AmberWarning
@@ -80,6 +87,8 @@ import com.example.ui.theme.Slate800
 import com.example.ui.theme.Slate850
 import com.example.ui.theme.Slate900
 import com.example.ui.theme.Slate950
+import com.example.util.ClipboardHelper
+import kotlinx.coroutines.delay
 import org.json.JSONArray
 
 enum class ClarificationAction {
@@ -110,6 +119,13 @@ fun InteractiveClarificationCard(
     var userClarificationInput by remember(doubt.id) { mutableStateOf("") }
     var selectedOptionChip by remember(doubt.id) { mutableStateOf<String?>(null) }
     var activeMode by remember(doubt.id, globalClarificationMode) { mutableStateOf(globalClarificationMode) }
+    var justCopiedAnswer by remember(doubt.id) { mutableStateOf(false) }
+    LaunchedEffect(justCopiedAnswer) {
+        if (justCopiedAnswer) {
+            delay(2_000L)
+            justCopiedAnswer = false
+        }
+    }
 
     // Parse options from JSON safely
     val parsedOptions = remember(doubt.suggestedOptionsJson) {
@@ -561,6 +577,28 @@ fun InteractiveClarificationCard(
                                     lineHeight = 20.sp
                                 )
                             )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = { ExternalReferenceHelper.openInGoogle(context, doubt) },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(14.dp), tint = ElectricCyan)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Search Google", fontSize = 11.sp, color = ElectricCyan)
+                                }
+                                OutlinedButton(
+                                    onClick = { ExternalReferenceHelper.openInChatGpt(context, doubt) },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(14.dp), tint = NeonViolet)
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Ask ChatGPT", fontSize = 11.sp, color = NeonViolet)
+                                }
+                            }
                         }
                     }
                 }
@@ -573,13 +611,34 @@ fun InteractiveClarificationCard(
                         border = BorderStroke(1.dp, Slate800)
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
-                            Text(
-                                text = "⚡ Short Answer",
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = ElectricCyan
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "⚡ Short Answer",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = ElectricCyan
+                                    )
                                 )
-                            )
+                                IconButton(
+                                    onClick = {
+                                        if (ClipboardHelper.copyAnswer(context, doubt.quickAnswer)) {
+                                            justCopiedAnswer = true
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("clarification_copy_button_${doubt.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = if (justCopiedAnswer) Icons.Default.Check else Icons.Default.ContentCopy,
+                                        contentDescription = stringResource(R.string.cd_copy_answer),
+                                        tint = if (justCopiedAnswer) EmeraldSuccess else ElectricCyan,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = doubt.quickAnswer,
@@ -600,13 +659,34 @@ fun InteractiveClarificationCard(
                         border = BorderStroke(1.dp, Slate800)
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
-                            Text(
-                                text = "📖 Direct Detailed Explanation",
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    color = NeonViolet
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "📖 Direct Detailed Explanation",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        color = NeonViolet
+                                    )
                                 )
-                            )
+                                IconButton(
+                                    onClick = {
+                                        if (ClipboardHelper.copyAnswer(context, doubt.detailedAnswer)) {
+                                            justCopiedAnswer = true
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("clarification_copy_button_${doubt.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = if (justCopiedAnswer) Icons.Default.Check else Icons.Default.ContentCopy,
+                                        contentDescription = stringResource(R.string.cd_copy_answer),
+                                        tint = if (justCopiedAnswer) EmeraldSuccess else NeonViolet,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = doubt.detailedAnswer,

@@ -1,0 +1,119 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidDoubtBackup(data) {
+      return data.localId is int && data.localId >= 0 &&
+             data.query is string && data.query.size() >= 1 && data.query.size() <= 2000 &&
+             data.summary is string && data.summary.size() <= 10000 &&
+             (!('oneSentenceSummary' in data) || (data.oneSentenceSummary is string && data.oneSentenceSummary.size() <= 500)) &&
+             data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
+             (!('customTag' in data) || (data.customTag is string && data.customTag.size() <= 60)) &&
+             data.timestamp is int && data.timestamp >= 0 &&
+             data.isResolved is bool &&
+             data.isStarred is bool &&
+             data.confidenceScore is number && data.confidenceScore >= 0.0 && data.confidenceScore <= 1.0 &&
+             data.followUpCount is int && data.followUpCount >= 0;
+    }
+
+    function isValidSessionBackup(data) {
+      return data.localId is int && data.localId >= 0 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 300 &&
+             data.answerJson is string && data.answerJson.size() >= 1 && data.answerJson.size() <= 40000 &&
+             (!('customTag' in data) || (data.customTag is string && data.customTag.size() <= 60)) &&
+             (!('category' in data) || (data.category is string && data.category.size() <= 60)) &&
+             data.isPinned is bool &&
+             data.timestamp is int && data.timestamp >= 0;
+    }
+
+    match /users/{userId}/doubts/{doubtId} {
+      allow get: if isOwner(userId) && isValidId(doubtId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(doubtId) &&
+                       incoming().keys().hasAll([
+                         'localId', 'query', 'summary', 'category', 'timestamp',
+                         'isResolved', 'isStarred', 'confidenceScore', 'followUpCount',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'localId', 'query', 'summary', 'oneSentenceSummary',
+                         'category', 'customTag', 'timestamp', 'isResolved',
+                         'isStarred', 'confidenceScore', 'followUpCount',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidDoubtBackup(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(doubtId) &&
+                       isValidDoubtBackup(incoming()) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'localId', 'query', 'summary', 'oneSentenceSummary',
+                         'category', 'customTag', 'timestamp', 'isResolved',
+                         'isStarred', 'confidenceScore', 'followUpCount', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(doubtId);
+    }
+
+    match /users/{userId}/sessions/{sessionId} {
+      allow get: if isOwner(userId) && isValidId(sessionId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(sessionId) &&
+                       incoming().keys().hasAll([
+                         'localId', 'title', 'answerJson', 'isPinned',
+                         'timestamp', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'localId', 'title', 'answerJson', 'customTag',
+                         'category', 'isPinned', 'timestamp', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       isValidSessionBackup(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(sessionId) &&
+                       isValidSessionBackup(incoming()) &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'localId', 'title', 'answerJson', 'customTag',
+                         'category', 'isPinned', 'timestamp', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(sessionId);
+    }
+  }
+}

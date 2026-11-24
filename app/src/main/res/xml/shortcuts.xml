@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="start_new_doubt"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_btn_speak_now"
+        android:shortcutShortLabel="@string/shortcut_new_doubt_short"
+        android:shortcutLongLabel="@string/shortcut_new_doubt_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.doubtsense.qxrvtp"
+            android:targetClass="com.example.MainActivity">
+            <extra
+                android:name="extra_shortcut_action"
+                android:value="NEW_DOUBT" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="view_history"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_menu_recent_history"
+        android:shortcutShortLabel="@string/shortcut_view_history_short"
+        android:shortcutLongLabel="@string/shortcut_view_history_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.doubtsense.qxrvtp"
+            android:targetClass="com.example.MainActivity">
+            <extra
+                android:name="extra_shortcut_action"
+                android:value="VIEW_HISTORY" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="open_settings"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_menu_preferences"
+        android:shortcutShortLabel="@string/shortcut_open_settings_short"
+        android:shortcutLongLabel="@string/shortcut_open_settings_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.aistudio.doubtsense.qxrvtp"
+            android:targetClass="com.example.MainActivity">
+            <extra
+                android:name="extra_shortcut_action"
+                android:value="OPEN_SETTINGS" />
+        </intent>
+    </shortcut>
+</shortcuts>

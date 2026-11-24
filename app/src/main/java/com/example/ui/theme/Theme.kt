@@ -11,6 +11,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
+import com.example.util.ThemeMode
+
 private val DoubtSenseDarkColorScheme = darkColorScheme(
     primary = ElectricCyan,
     onPrimary = Slate950,
@@ -38,30 +40,55 @@ private val DoubtSenseLightColorScheme = lightColorScheme(
     onPrimary = Color.White,
     primaryContainer = SoftCyan,
     onPrimaryContainer = Slate950,
-    secondary = ElectricCyan,
-    onSecondary = Slate950,
+    secondary = Color(0xFF0284C7),
+    onSecondary = Color.White,
     secondaryContainer = Color(0xFFE2E8F0),
     onSecondaryContainer = Slate900,
-    tertiary = EmeraldSuccess,
+    tertiary = Color(0xFF059669),
     onTertiary = Color.White,
     background = Color(0xFFF8FAFC),
     onBackground = Slate900,
     surface = Color.White,
     onSurface = Slate900,
-    surfaceVariant = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFFE2E8F0),
     onSurfaceVariant = Slate700,
-    outline = Color(0xFFCBD5E1),
+    outline = Color(0xFF94A3B8),
     error = RoseError,
     onError = Color.White
 )
 
+private val DoubtSenseHighContrastColorScheme = darkColorScheme(
+    primary = HighContrastYellow,
+    onPrimary = HighContrastBlack,
+    primaryContainer = HighContrastCard,
+    onPrimaryContainer = HighContrastWhite,
+    secondary = HighContrastCyan,
+    onSecondary = HighContrastBlack,
+    secondaryContainer = HighContrastSurface,
+    onSecondaryContainer = HighContrastWhite,
+    tertiary = HighContrastCyan,
+    onTertiary = HighContrastBlack,
+    background = HighContrastBlack,
+    onBackground = HighContrastWhite,
+    surface = HighContrastSurface,
+    onSurface = HighContrastWhite,
+    surfaceVariant = HighContrastCard,
+    onSurfaceVariant = HighContrastWhite,
+    outline = HighContrastWhite,
+    error = Color(0xFFFF6B6B),
+    onError = HighContrastBlack
+)
+
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = true, // Default to sleek tech dark theme
-    dynamicColor: Boolean = false, // Preserve intentional branding
+    themeMode: ThemeMode = ThemeMode.DARK,
+    darkTheme: Boolean = themeMode != ThemeMode.LIGHT,
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colorScheme = when {
+        themeMode == ThemeMode.HIGH_CONTRAST -> DoubtSenseHighContrastColorScheme
+        themeMode == ThemeMode.LIGHT -> DoubtSenseLightColorScheme
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             val context = LocalContext.current
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)

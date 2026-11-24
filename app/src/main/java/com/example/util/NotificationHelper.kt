@@ -1,26 +1,33 @@
 package com.example.util
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.receiver.ExportReminderReceiver
 
 object NotificationHelper {
     const val CHANNEL_LISTENING_ID = "doubtsense_listening_channel"
     const val CHANNEL_ANSWERS_ID = "doubtsense_answers_channel"
+    const val CHANNEL_EXPORT_REMINDERS_ID = "doubtsense_export_reminders_channel"
     const val NOTIFICATION_LISTENING_ID = 1001
     const val NOTIFICATION_ANSWER_BASE_ID = 2000
+    const val NOTIFICATION_EXPORT_REMINDER_ID = 3001
 
     const val ACTION_STOP = "com.example.doubtsense.ACTION_STOP"
     const val ACTION_PAUSE = "com.example.doubtsense.ACTION_PAUSE"
     const val ACTION_RESUME = "com.example.doubtsense.ACTION_RESUME"
     const val EXTRA_DOUBT_ID = "extra_doubt_id"
+    const val EXTRA_OPEN_HISTORY = "extra_open_history"
 
     fun createNotificationChannels(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -45,8 +52,18 @@ object NotificationHelper {
                 setShowBadge(true)
             }
 
+            val exportRemindersChannel = NotificationChannel(
+                CHANNEL_EXPORT_REMINDERS_ID,
+                "Backup & Export Reminders",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Periodic reminders to export and back up your conversation history"
+                setShowBadge(true)
+            }
+
             manager.createNotificationChannel(listeningChannel)
             manager.createNotificationChannel(answersChannel)
+            manager.createNotificationChannel(exportRemindersChannel)
         }
     }
 
@@ -145,5 +162,77 @@ object NotificationHelper {
 
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify((NOTIFICATION_ANSWER_BASE_ID + (doubtId % 1000)).toInt(), notification)
+    }
+
+    /**
+     * Posts a local notification reminding the user to export their conversation history.
+     * Returns true if notification permission is granted and the notification was dispatched.
+     */
+    fun showExportReminderNotification(
+        context: Context,
+        daysSinceLastExport: Int?,
+        sessionCount: Int,
+        doubtCount: Int
+    ): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) return false
+        }
+
+        createNotificationChannels(context)
+
+        val openHistoryIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_OPEN_HISTORY, true)
+        }
+        val openHistoryPending = PendingIntent.getActivity(
+            context,
+            NOTIFICATION_EXPORT_REMINDER_ID,
+            openHistoryIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val snoozeIntent = Intent(context, ExportReminderReceiver::class.java).apply {
+            action = ExportReminderReceiver.ACTION_SNOOZE_EXPORT_REMINDER
+        }
+        val snoozePending = PendingIntent.getBroadcast(
+            context,
+            NOTIFICATION_EXPORT_REMINDER_ID + 1,
+            snoozeIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val message = when {
+            daysSinceLastExport == null ->
+                "You have $sessionCount session(s) and $doubtCount doubt(s) not backed up yet. Export a PDF or text copy to keep them safe."
+            daysSinceLastExport <= 0 ->
+                "Keep your study logs safe! Tap to export your $sessionCount session(s) and $doubtCount doubt(s) as PDF or text."
+            else ->
+                "It has been $daysSinceLastExport day(s) since your last backup. Export $sessionCount session(s) & $doubtCount doubt(s) now."
+        }
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_EXPORT_REMINDERS_ID)
+            .setSmallIcon(R.drawable.doubtsense_logo)
+            .setContentTitle("Back Up Your Conversation History")
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setContentIntent(openHistoryPending)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .addAction(0, "Export Logs", openHistoryPending)
+            .addAction(0, "Remind Later", snoozePending)
+            .build()
+
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_EXPORT_REMINDER_ID, notification)
+        return true
+    }
+
+    fun cancelExportReminderNotification(context: Context) {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.cancel(NOTIFICATION_EXPORT_REMINDER_ID)
     }
 }

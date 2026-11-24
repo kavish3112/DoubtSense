@@ -2,6 +2,10 @@ package com.example.util
 
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
+import com.example.R
+import com.example.ai.AnswerEngineResult
+import com.example.data.model.ConversationSession
 import com.example.data.model.DoubtItem
 
 enum class ShareFormat {
@@ -101,32 +105,127 @@ object ShareHelper {
         conversationTurns: List<String>,
         doubts: List<DoubtItem>,
         format: ExportDocumentFormat,
-        title: String = "DoubtSense Conversation Digest"
+        title: String = "DoubtSense Conversation Digest",
+        sessions: List<ConversationSession> = emptyList()
     ) {
         DocumentExportHelper.exportConversation(
             context = context,
             conversationTurns = conversationTurns,
             doubts = doubts,
             format = format,
-            documentTitle = title
+            documentTitle = title,
+            sessions = sessions
         )
     }
 
     /**
-     * Exports a list of doubts as a consolidated study digest / revision sheet (defaults to structured text).
+     * Exports consolidated doubt history alongside complete session analysis metrics
+     * to a shareable PDF or Structured Text file.
+     */
+    fun exportHistoryWithSessionAnalysis(
+        context: Context,
+        sessions: List<ConversationSession>,
+        doubts: List<DoubtItem>,
+        format: ExportDocumentFormat,
+        title: String = "DoubtSense Doubt History & Session Analysis",
+        onProgress: ((Float) -> Unit)? = null
+    ) {
+        if (sessions.isEmpty() && doubts.isEmpty()) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.export_history_empty_toast),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        DocumentExportHelper.exportHistoryWithSessionAnalysis(
+            context = context,
+            sessions = sessions,
+            doubts = doubts,
+            format = format,
+            documentTitle = title,
+            onProgress = onProgress
+        )
+    }
+
+    /**
+     * Exports a stored Room ConversationSession and its linked doubts to PDF or Structured Text.
+     */
+    fun exportSession(
+        context: Context,
+        session: ConversationSession,
+        doubts: List<DoubtItem>,
+        format: ExportDocumentFormat
+    ) {
+        DocumentExportHelper.exportSession(context, session, doubts, format)
+    }
+
+    /**
+     * Exports a list of doubts as a consolidated study digest / revision sheet.
      */
     fun exportDoubtsDigest(
         context: Context,
         doubts: List<DoubtItem>,
-        format: ExportDocumentFormat = ExportDocumentFormat.STRUCTURED_TEXT
+        format: ExportDocumentFormat = ExportDocumentFormat.STRUCTURED_TEXT,
+        title: String = "DoubtSense Study Digest (${doubts.size} Doubts)",
+        onProgress: ((Float) -> Unit)? = null
     ) {
-        if (doubts.isEmpty()) return
+        if (doubts.isEmpty()) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.export_history_empty_toast),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         DocumentExportHelper.exportConversation(
             context = context,
             conversationTurns = emptyList(),
             doubts = doubts,
             format = format,
-            documentTitle = "DoubtSense Study Digest (${doubts.size} Doubts)"
+            documentTitle = title,
+            onProgress = onProgress
         )
+    }
+
+    /**
+     * Exports the Room-backed Answer Engine Q&A history list as a shareable Text (.txt), PDF, or CSV file.
+     */
+    fun exportAnswerEngineHistory(
+        context: Context,
+        results: List<AnswerEngineResult>,
+        format: ExportDocumentFormat,
+        onProgress: ((Float) -> Unit)? = null
+    ) {
+        val doubts = results.map { item ->
+            item.toDoubtItem(
+                conversationalContext = if (item.capturedViaVoice) {
+                    "Captured via Voice Microphone"
+                } else {
+                    "Answer Engine Query"
+                }
+            )
+        }
+        exportDoubtsDigest(
+            context = context,
+            doubts = doubts,
+            format = format,
+            title = "DoubtSense Saved Q&A History (${results.size} Items)",
+            onProgress = onProgress
+        )
+    }
+
+    fun shareAnswerEngineResult(
+        context: Context,
+        result: AnswerEngineResult
+    ) {
+        val doubt = result.toDoubtItem(
+            conversationalContext = if (result.capturedViaVoice) {
+                "Captured via Voice Microphone"
+            } else {
+                "Answer Engine Query"
+            }
+        )
+        shareDoubt(context, doubt, ShareFormat.FULL_SUMMARY)
     }
 }

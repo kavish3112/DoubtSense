@@ -21,3 +21,11 @@ val Slate100 = Color(0xFFF1F5F9)
 val EmeraldSuccess = Color(0xFF10B981)
 val AmberWarning = Color(0xFFF59E0B)
 val RoseError = Color(0xFFF43F5E)
+
+// High-Contrast Accessibility Palette
+val HighContrastBlack = Color(0xFF000000)
+val HighContrastSurface = Color(0xFF111111)
+val HighContrastCard = Color(0xFF1A1A1A)
+val HighContrastYellow = Color(0xFFFFFF00)
+val HighContrastCyan = Color(0xFF00FFFF)
+val HighContrastWhite = Color(0xFFFFFFFF)

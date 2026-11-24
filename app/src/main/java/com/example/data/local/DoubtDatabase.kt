@@ -4,11 +4,17 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.data.model.ConversationSession
 import com.example.data.model.DoubtItem
 
-@Database(entities = [DoubtItem::class], version = 2, exportSchema = false)
+@Database(
+    entities = [DoubtItem::class, ConversationSession::class],
+    version = 5,
+    exportSchema = false
+)
 abstract class DoubtDatabase : RoomDatabase() {
     abstract fun doubtDao(): DoubtDao
+    abstract fun conversationSessionDao(): ConversationSessionDao
 
     companion object {
         @Volatile
@@ -20,7 +26,7 @@ abstract class DoubtDatabase : RoomDatabase() {
                     context.applicationContext,
                     DoubtDatabase::class.java,
                     "doubtsense_database.db"
-                ).fallbackToDestructiveMigration().build()
+                ).fallbackToDestructiveMigration(dropAllTables = true).build()
                 INSTANCE = instance
                 instance
             }

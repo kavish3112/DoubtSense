@@ -5,6 +5,8 @@ import com.example.data.model.DoubtItem
 import com.google.firebase.Firebase
 import com.google.firebase.ai.ai
 import com.google.firebase.ai.type.Schema
+import com.google.firebase.ai.type.Tool
+import com.google.firebase.ai.type.content
 import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -79,6 +81,16 @@ class DoubtAnalysisEngine {
         )
     )
 
+    private val tutorSystemInstruction = content {
+        text(
+            """
+            You are DoubtSense's Personalised Answer Intelligence, an authoritative domain specialist and educator.
+            Give crisp, accurate, structured explanations with exact terminology, formulas/code where appropriate,
+            step-by-step reasoning, a concrete worked example, and a 1-sentence Key Takeaway. Never give vague filler.
+            """.trimIndent()
+        )
+    }
+
     private val genConfig = generationConfig {
         responseMimeType = "application/json"
         responseSchema = doubtDetectionSchema
@@ -88,14 +100,35 @@ class DoubtAnalysisEngine {
     private val model by lazy {
         Firebase.ai.generativeModel(
             modelName = "gemini-3.8-flash",
-            generationConfig = genConfig
+            generationConfig = genConfig,
+            systemInstruction = tutorSystemInstruction
         )
     }
 
     // Freeform model for generating adaptive personalized answers based on user clarification
     private val adaptiveModel by lazy {
         Firebase.ai.generativeModel(
-            modelName = "gemini-3.8-flash"
+            modelName = "gemini-3.8-flash",
+            generationConfig = generationConfig { temperature = 0.25f },
+            systemInstruction = tutorSystemInstruction
+        )
+    }
+
+    // Google Search grounded adaptive model for fact-checked explanations
+    private val groundedAdaptiveModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = "gemini-3.8-flash",
+            generationConfig = generationConfig { temperature = 0.2f },
+            tools = listOf(Tool.googleSearch()),
+            systemInstruction = tutorSystemInstruction
+        )
+    }
+
+    private val liteAdaptiveModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = "gemini-3.5-flash-lite",
+            generationConfig = generationConfig { temperature = 0.25f },
+            systemInstruction = tutorSystemInstruction
         )
     }
 
@@ -255,7 +288,8 @@ class DoubtAnalysisEngine {
     suspend fun generatePersonalizedAnswer(
         doubt: DoubtItem,
         userClarification: String,
-        style: String = "Detailed technical explanation"
+        style: String = "Detailed technical explanation",
+        factCheckingMode: Boolean = false
     ): String = withContext(Dispatchers.IO) {
         val prompt = """
             You are DoubtSense's Personalised Answer Intelligence.
@@ -282,79 +316,107 @@ class DoubtAnalysisEngine {
             4. Conclude with a 1-sentence Key Takeaway.
         """.trimIndent()
 
+        val factCheckingRule = if (factCheckingMode) {
+            "\n5. FACT-CHECKING MODE ENABLED: Verify all factual statements carefully against authoritative external sources and end with a 'Verified External Sources:' list containing at least 2 real reference titles and HTTPS URLs."
+        } else {
+            ""
+        }
+
+        val finalPrompt = "$prompt$factCheckingRule"
+
+        // 1. Always try Google Search grounding first for accurate, up-to-date answers
         try {
-            val response = withTimeout(60_000L) {
-                adaptiveModel.generateContent(prompt)
+            val groundedResponse = withTimeout(55_000L) {
+                groundedAdaptiveModel.generateContent(finalPrompt)
+            }
+            val groundedText = groundedResponse.text
+            if (!groundedText.isNullOrBlank()) {
+                val webChunks = groundedResponse.candidates.firstOrNull()?.groundingMetadata?.groundingChunks
+                    ?.mapNotNull { it.web }
+                    ?.filter { !it.uri.isNullOrBlank() }
+                    .orEmpty()
+                return@withContext if (webChunks.isNotEmpty() && !groundedText.contains("Verified External Sources")) {
+                    buildString {
+                        append(groundedText.trim())
+                        append("\n\nVerified External Sources:\n")
+                        webChunks.distinctBy { it.uri }.take(4).forEach { web ->
+                            appendLine("• ${web.title?.ifBlank { web.uri } ?: web.uri} (${web.uri})")
+                        }
+                    }
+                } else {
+                    groundedText
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Grounded adaptive answer unavailable, falling back to standard model: ${e.message}")
+        }
+
+        try {
+            val response = withTimeout(50_000L) {
+                adaptiveModel.generateContent(finalPrompt)
             }
             val text = response.text
             if (!text.isNullOrBlank()) {
                 return@withContext text
             }
-            return@withContext "Based on your clarification ('$userClarification'), here is the targeted explanation for ${doubt.topic}:\n\n${doubt.detailedAnswer}"
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to generate personalized answer", e)
-            return@withContext "Based on your clarification ('$userClarification'):\n\n${doubt.detailedAnswer}"
+            Log.e(TAG, "Primary personalized answer failed: ${e.message}", e)
+        }
+
+        // 2. Fast backup Gemini Flash-Lite attempt
+        try {
+            val liteResponse = withTimeout(35_000L) {
+                liteAdaptiveModel.generateContent(finalPrompt)
+            }
+            val liteText = liteResponse.text
+            if (!liteText.isNullOrBlank()) {
+                return@withContext liteText
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Backup personalized answer failed: ${e.message}", e)
+        }
+
+        return@withContext buildFallbackPersonalizedAnswer(doubt, userClarification, factCheckingMode)
+    }
+
+    private fun buildFallbackPersonalizedAnswer(
+        doubt: DoubtItem,
+        userClarification: String,
+        factCheckingMode: Boolean
+    ): String = buildString {
+        append("Based on your clarification ('$userClarification'), here is the targeted explanation for ${doubt.topic}:\n\n${doubt.detailedAnswer}")
+        if (factCheckingMode) {
+            val sources = doubt.getVerificationSources().ifEmpty {
+                ContextAnalysisService.defaultVerificationSourcesForTopic(doubt.subject, doubt.topic, doubt.doubtSnippet)
+            }
+            append("\n\nVerified External Sources:\n")
+            sources.forEach { src ->
+                appendLine("• ${src.title} (${src.url})")
+            }
         }
     }
 
     /**
-     * Fallback heuristic analysis if offline or backend error occurs.
+     * Fallback analysis delegating to ContextAnalysisService's curated STEM/CS & web lookup pipeline.
      */
     private fun fallbackAnalysis(utterance: String, conversationTurns: List<String>): AnalysisResult {
-        val lower = utterance.lowercase()
-        val questionSignals = listOf(
-            "why", "how", "what", "confused", "don't understand", "dont understand",
-            "explain", "difference between", "what is", "can you", "what does",
-            "not clear", "doesn't make sense", "why does", "how does", "work together"
+        val contextResult = ContextAnalysisService().fallbackContextAnalysis(
+            segment = utterance,
+            surroundingContext = conversationTurns,
+            factCheckingMode = false
         )
-
-        val hasSignal = questionSignals.any { lower.contains(it) } || lower.endsWith("?")
-        if (!hasSignal) {
+        if (!contextResult.isDoubt) {
             return AnalysisResult(isDoubt = false, doubtItem = null, rawReason = "Heuristic non-doubt")
         }
-
-        val subject = if (lower.contains("tree") || lower.contains("forest") || lower.contains("model") || lower.contains("learning")) "Machine Learning"
-        else if (lower.contains("photo") || lower.contains("cell") || lower.contains("biology")) "Cellular Biology"
-        else if (lower.contains("sort") || lower.contains("search") || lower.contains("algorithm")) "Computer Science"
-        else if (lower.contains("gravity") || lower.contains("force") || lower.contains("physics")) "Physics"
-        else "General Science"
-
-        val topic = if (lower.contains("forest") || lower.contains("tree")) "Random Forest Ensemble"
-        else if (lower.contains("photo")) "Photosynthesis"
-        else if (lower.contains("sort")) "Sorting Algorithms"
-        else "Concept Understanding"
-
-        val concepts = if (topic.contains("Forest")) "Decision Trees, Bagging, Majority Voting"
-        else if (topic.contains("Photosynthesis")) "Chloroplasts, ATP Synthase, Light Reactions"
-        else "Core Mechanics, Variables"
-
-        val intent = "Understand how $topic functions in context"
-        val doubtType = "Working Principle"
-
-        val options = listOf("Core Mechanism", "Practical Example", "Step-by-step Walkthrough")
-        val optionsJson = JSONArray(options).toString()
-
-        val item = DoubtItem(
-            doubtSnippet = utterance,
-            subject = subject,
-            topic = topic,
-            importantConcepts = concepts,
-            doubtType = doubtType,
-            intent = intent,
-            quickAnswer = "In $subject, $topic resolves '$utterance' through interconnected principles.",
-            detailedAnswer = "Detailed breakdown for '$utterance' in $topic:\n\n1. Concept Overview: $concepts form the structural foundation.\n2. Working Principle: When components interact, they aggregate individual states to produce the final output.\n3. Takeaway: Analyzing the surrounding dialogue ('${conversationTurns.takeLast(2).joinToString(" ")}') confirms this relationship.",
-            notificationSummary = "$topic: Working principle explanation.",
-            conversationalContext = conversationTurns.takeLast(4).joinToString(" | "),
-            isAmbiguous = utterance.split(" ").size < 5,
-            clarificationQuestion = "Would you like to focus on the core mechanism or a practical code/math example?",
-            suggestedOptionsJson = optionsJson,
-            referenceMaterials = "Official reference documentation on $topic.",
-            conversationSuggestions = "Could you explain how $topic handles edge cases?",
-            confidenceScore = 0.8f
+        return AnalysisResult(
+            isDoubt = true,
+            doubtItem = contextResult.toDoubtItem(conversationTurns.takeLast(4).joinToString(" | "))
         )
-
-        return AnalysisResult(isDoubt = true, doubtItem = item)
     }
 }

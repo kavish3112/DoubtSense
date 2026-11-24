@@ -14,6 +14,21 @@ interface DoubtDao {
     @Query("SELECT * FROM doubts ORDER BY timestamp DESC")
     fun getAllDoubts(): Flow<List<DoubtItem>>
 
+    @Query("SELECT * FROM doubts ORDER BY timestamp DESC")
+    suspend fun getAllDoubtsOnce(): List<DoubtItem>
+
+    @Query("SELECT COUNT(*) FROM doubts")
+    suspend fun getDoubtCount(): Int
+
+    @Query("SELECT MAX(timestamp) FROM doubts")
+    suspend fun getLatestDoubtTimestamp(): Long?
+
+    @Query("SELECT * FROM doubts WHERE sessionId = :sessionId ORDER BY timestamp ASC")
+    fun getDoubtsForSession(sessionId: Long): Flow<List<DoubtItem>>
+
+    @Query("SELECT * FROM doubts WHERE sessionId = :sessionId ORDER BY timestamp ASC")
+    suspend fun getDoubtsForSessionOnce(sessionId: Long): List<DoubtItem>
+
     @Query("SELECT * FROM doubts WHERE id = :id LIMIT 1")
     suspend fun getDoubtById(id: Long): DoubtItem?
 
@@ -28,6 +43,9 @@ interface DoubtDao {
 
     @Query("DELETE FROM doubts WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM doubts WHERE timestamp < :cutoffTimestamp")
+    suspend fun deleteOlderThan(cutoffTimestamp: Long): Int
 
     @Query("DELETE FROM doubts")
     suspend fun clearAll()
