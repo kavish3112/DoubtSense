@@ -52,6 +52,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Mic
@@ -63,6 +65,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
@@ -123,6 +126,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.data.model.DoubtItem
+import com.example.data.remote.CloudSyncManager
+import com.example.data.remote.CloudSyncUiState
+import com.example.data.remote.GoogleAuthHelper
+import com.example.data.remote.GoogleSignInOutcome
 import com.example.service.ChatTurnHighlightState
 import com.example.service.ChatVoiceInputState
 import com.example.service.ListeningState
@@ -171,6 +178,7 @@ fun DashboardScreen(
     val uncertaintyLabel by ListeningStateManager.uncertaintyLabel.collectAsState()
     val autoReadAloud by ListeningStateManager.autoReadAloud.collectAsState()
     val factCheckingMode by ListeningStateManager.factCheckingMode.collectAsState()
+    val cloudSyncState by CloudSyncManager.syncState.collectAsState()
     val batterySaverPref by AppPreferencesManager.batterySaverMode.collectAsState()
     val batterySaverActive = remember(batterySaverPref) {
         batterySaverPref || BatteryMonitor.getBatteryStatus(context).isPowerSaveMode
@@ -408,6 +416,97 @@ fun DashboardScreen(
 
                     // Status Indicator Pill
                     StatusPill(listeningState = listeningState, isAnalyzing = isAnalyzing)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Cross-device Firestore Sync Status Pill
+            val syncTint = when (cloudSyncState) {
+                is CloudSyncUiState.Synced -> EmeraldSuccess
+                is CloudSyncUiState.Syncing -> ElectricCyan
+                is CloudSyncUiState.Error -> RoseError
+                is CloudSyncUiState.OfflinePaused -> AmberWarning
+                CloudSyncUiState.SignedOut -> MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            val syncLabel = when (val st = cloudSyncState) {
+                is CloudSyncUiState.Synced ->
+                    "Cloud Synced (${st.sessionCount} sessions)${st.userEmail?.let { " • $it" } ?: ""}"
+                is CloudSyncUiState.Syncing -> st.message
+                is CloudSyncUiState.OfflinePaused -> "Cloud Sync Paused (${st.userEmail ?: "Offline"})"
+                is CloudSyncUiState.Error -> "Sync Issue • Tap to retry"
+                CloudSyncUiState.SignedOut -> "Tap to sign in & sync sessions across devices"
+            }
+            Surface(
+                onClick = {
+                    coroutineScope.launch {
+                        if (cloudSyncState is CloudSyncUiState.SignedOut) {
+                            val auth = CloudSyncManager.resolveFirebaseAuthOrNull()
+                            if (auth != null) {
+                                when (val res = GoogleAuthHelper.signInInteractive(context, auth)) {
+                                    is GoogleSignInOutcome.Success -> {
+                                        CloudSyncManager.bindAuthenticatedSession(context, repository, res.user)
+                                    }
+                                    is GoogleSignInOutcome.Error -> {
+                                        ListeningStateManager.setStatusMessage(res.message)
+                                    }
+                                    GoogleSignInOutcome.Cancelled -> Unit
+                                }
+                            } else {
+                                ListeningStateManager.setStatusMessage("Google Sign-In unavailable in this environment.")
+                            }
+                        } else {
+                            CloudSyncManager.syncNow(context)
+                        }
+                    }
+                },
+                color = syncTint.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, syncTint.copy(alpha = 0.35f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .testTag("dashboard_cloud_sync_pill")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = when (cloudSyncState) {
+                                is CloudSyncUiState.Synced -> Icons.Default.CloudDone
+                                is CloudSyncUiState.Syncing -> Icons.Default.Sync
+                                else -> Icons.Default.CloudOff
+                            },
+                            contentDescription = "Cross-device cloud sync status",
+                            tint = syncTint,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = syncLabel,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Medium
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = if (cloudSyncState is CloudSyncUiState.SignedOut) "Sign In" else "Sync Now",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            color = syncTint,
+                            fontWeight = FontWeight.Bold
+                        )
+                    )
                 }
             }
         }

@@ -49,6 +49,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.ai.AnswerEngineResult
+import com.example.data.remote.CloudSyncManager
+import com.example.data.remote.GoogleAuthHelper
 import com.example.service.ListeningStateManager
 import com.example.ui.screens.AnswerEngineScreen
 import com.example.ui.screens.CategoryDashboardScreen
@@ -57,11 +59,13 @@ import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.Slate950
+import com.example.util.AppPreferencesManager
 import com.example.util.DocumentExportHelper
 import com.example.util.ExportDocumentFormat
 import com.example.util.ShareHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -101,7 +105,32 @@ fun DoubtSenseApp(
     val latestDoubt by ListeningStateManager.latestDetectedDoubt.collectAsState()
     val repository = remember { ListeningStateManager.getRepository(context) }
     val recentDoubts by repository.allDoubts.collectAsState(initial = emptyList())
+    val autoCloudSyncEnabled by AppPreferencesManager.autoCloudSyncEnabled.collectAsState()
+    val offlineMode by AppPreferencesManager.offlineMode.collectAsState()
+    val firebaseAuth = remember { CloudSyncManager.resolveFirebaseAuthOrNull() }
+    val observedUser = if (firebaseAuth != null) {
+        GoogleAuthHelper.authStateFlow(firebaseAuth).collectAsState(initial = firebaseAuth.currentUser).value
+    } else {
+        null
+    }
     val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        AppPreferencesManager.init(context)
+        if (firebaseAuth != null && firebaseAuth.currentUser == null && autoCloudSyncEnabled && !offlineMode) {
+            runCatching { GoogleAuthHelper.attemptAutoSignIn(context, firebaseAuth) }
+        }
+    }
+
+    LaunchedEffect(observedUser?.uid, autoCloudSyncEnabled, offlineMode) {
+        CloudSyncManager.bindAuthenticatedSession(
+            context = context,
+            repo = repository,
+            user = observedUser,
+            autoSyncEnabled = autoCloudSyncEnabled,
+            offlineMode = offlineMode
+        )
+    }
 
     fun currentLiveSessionDoubts() = if (latestDoubt != null) {
         listOf(latestDoubt!!) + recentDoubts.filter { it.id != latestDoubt!!.id }.take(4)
@@ -389,6 +418,15 @@ fun DoubtSenseApp(
                             revisitedAnswerResult = AnswerEngineResult.fromDoubtItem(doubt)
                             revisitTrigger++
                             currentDestination = AppDestination.ANSWER_ENGINE
+                        },
+                        onContinueSessionInChat = { session ->
+                            coroutineScope.launch {
+                                val linkedDoubts = withContext(Dispatchers.IO) {
+                                    repository.getDoubtsForSessionOnce(session.id)
+                                }
+                                ListeningStateManager.restoreSessionIntoLiveChat(session, linkedDoubts)
+                                currentDestination = AppDestination.CONVERSATION
+                            }
                         }
                     )
                 }

@@ -32,6 +32,12 @@ interface DoubtDao {
     @Query("SELECT * FROM doubts WHERE id = :id LIMIT 1")
     suspend fun getDoubtById(id: Long): DoubtItem?
 
+    @Query("SELECT * FROM doubts WHERE cloudId = :cloudId LIMIT 1")
+    suspend fun getDoubtByCloudId(cloudId: String): DoubtItem?
+
+    @Query("UPDATE doubts SET sessionId = :localSessionId WHERE sessionCloudId = :sessionCloudId AND :sessionCloudId != ''")
+    suspend fun relinkDoubtsToSession(sessionCloudId: String, localSessionId: Long)
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDoubt(doubt: DoubtItem): Long
 
@@ -43,6 +49,9 @@ interface DoubtDao {
 
     @Query("DELETE FROM doubts WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM doubts WHERE cloudId = :cloudId")
+    suspend fun deleteByCloudId(cloudId: String)
 
     @Query("DELETE FROM doubts WHERE timestamp < :cutoffTimestamp")
     suspend fun deleteOlderThan(cutoffTimestamp: Long): Int

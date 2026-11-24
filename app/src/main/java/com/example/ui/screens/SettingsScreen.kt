@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.VolumeUp
@@ -99,7 +100,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.data.local.OfflineResponseCache
+import com.example.data.remote.CloudSyncManager
 import com.example.data.remote.CloudSyncRepository
+import com.example.data.remote.CloudSyncUiState
 import com.example.data.remote.GoogleAuthHelper
 import com.example.data.remote.GoogleSignInOutcome
 import com.example.service.ListeningStateManager
@@ -150,6 +153,8 @@ fun SettingsScreen(
     val offlineMode by AppPreferencesManager.offlineMode.collectAsState()
     val autoCleanup30Days by AppPreferencesManager.autoCleanup30Days.collectAsState()
     val lastCloudSyncTimestamp by AppPreferencesManager.lastCloudSyncTimestamp.collectAsState()
+    val autoCloudSyncEnabled by AppPreferencesManager.autoCloudSyncEnabled.collectAsState()
+    val cloudSyncManagerState by CloudSyncManager.syncState.collectAsState()
 
     val exportRemindersEnabled by ExportReminderManager.remindersEnabled.collectAsState()
     val exportIntervalDays by ExportReminderManager.intervalDays.collectAsState()
@@ -164,7 +169,7 @@ fun SettingsScreen(
     var cachedOfflineCount by remember { mutableIntStateOf(0) }
     val batteryStatus = remember { BatteryMonitor.getBatteryStatus(context) }
 
-    val firebaseAuth = remember { runCatching { FirebaseAuth.getInstance() }.getOrNull() }
+    val firebaseAuth = remember { CloudSyncManager.resolveFirebaseAuthOrNull() }
     var currentUser by remember(firebaseAuth) { mutableStateOf<FirebaseUser?>(firebaseAuth?.currentUser) }
     if (firebaseAuth != null) {
         val observedUser by GoogleAuthHelper.authStateFlow(firebaseAuth).collectAsState(initial = firebaseAuth.currentUser)
@@ -924,26 +929,69 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Cloud Sync & Backup (Firestore)",
+                            text = "Cross-Device Cloud Sync (Firestore)",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Auto-Sync Sessions Across Devices",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium)
+                            )
+                            Text(
+                                text = "Automatically saves new chat sessions & tags to Firestore in real time when signed in.",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontSize = 11.sp
+                                )
+                            )
+                        }
+                        Switch(
+                            checked = autoCloudSyncEnabled,
+                            onCheckedChange = { enabled ->
+                                AppPreferencesManager.setAutoCloudSyncEnabled(context, enabled)
+                                val repo = ListeningStateManager.getRepository(context)
+                                CloudSyncManager.bindAuthenticatedSession(
+                                    context = context,
+                                    repo = repo,
+                                    user = currentUser,
+                                    autoSyncEnabled = enabled,
+                                    offlineMode = offlineMode
+                                )
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = ElectricCyan),
+                            modifier = Modifier.testTag("auto_cloud_sync_switch")
                         )
                     }
 
                     if (currentUser == null) {
                         Text(
-                            text = "Sign in with Google to back up your local Room doubts and sessions to Firestore across devices.",
+                            text = "Sign in with Google to synchronize your chat sessions and doubts across all your Android devices.",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         )
                         Button(
                             onClick = {
+                                val auth = firebaseAuth
+                                if (auth == null) {
+                                    cloudSyncStatus = "Google Sign-In unavailable in this environment."
+                                    return@Button
+                                }
                                 coroutineScope.launch {
                                     isSyncBusy = true
                                     cloudSyncStatus = "Signing in with Google..."
-                                    when (val outcome = GoogleAuthHelper.signInWithGoogle(context)) {
+                                    when (val outcome = GoogleAuthHelper.signInInteractive(context, auth)) {
                                         is GoogleSignInOutcome.Success -> {
                                             currentUser = outcome.user
+                                            val repo = ListeningStateManager.getRepository(context)
+                                            CloudSyncManager.bindAuthenticatedSession(context, repo, outcome.user)
                                             cloudSyncStatus = "Signed in as ${outcome.user.email ?: outcome.user.displayName ?: "Google User"}"
                                         }
                                         is GoogleSignInOutcome.Cancelled -> {
@@ -976,6 +1024,13 @@ fun SettingsScreen(
                         } else {
                             "Never synced"
                         }
+                        val liveSyncText = when (val st = cloudSyncManagerState) {
+                            is CloudSyncUiState.Synced -> "Live Sync Active • ${st.sessionCount} sessions"
+                            is CloudSyncUiState.Syncing -> st.message
+                            is CloudSyncUiState.OfflinePaused -> "Paused (Offline Mode or Auto-Sync off)"
+                            is CloudSyncUiState.Error -> "Sync issue: ${st.message}"
+                            CloudSyncUiState.SignedOut -> "Signed in"
+                        }
                         Surface(
                             color = MaterialTheme.colorScheme.surface,
                             shape = RoundedCornerShape(12.dp),
@@ -987,7 +1042,14 @@ fun SettingsScreen(
                                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold)
                                 )
                                 Text(
-                                    text = "Last backup: $lastSyncLabel",
+                                    text = liveSyncText,
+                                    style = MaterialTheme.typography.bodySmall.copy(
+                                        color = ElectricCyan,
+                                        fontSize = 11.sp
+                                    )
+                                )
+                                Text(
+                                    text = "Last sync: $lastSyncLabel",
                                     style = MaterialTheme.typography.bodySmall.copy(
                                         color = EmeraldSuccess,
                                         fontSize = 11.sp
@@ -1000,6 +1062,32 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            Button(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        isSyncBusy = true
+                                        cloudSyncStatus = "Syncing sessions across devices..."
+                                        val res = CloudSyncManager.syncNow(context)
+                                        res.onSuccess { stats ->
+                                            cloudSyncStatus = "Synced (${stats.sessionsInserted} new sessions, ${stats.sessionsUpdated} updated)"
+                                            Toast.makeText(context, cloudSyncStatus, Toast.LENGTH_SHORT).show()
+                                        }.onFailure { err ->
+                                            cloudSyncStatus = "Sync failed: ${err.localizedMessage ?: "Permission or network error"}"
+                                        }
+                                        isSyncBusy = false
+                                    }
+                                },
+                                enabled = !isSyncBusy,
+                                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = Slate950),
+                                modifier = Modifier
+                                    .minimumInteractiveComponentSize()
+                                    .testTag("cloud_sync_now_button")
+                            ) {
+                                Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sync Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+
                             FilledTonalButton(
                                 onClick = {
                                     coroutineScope.launch {
@@ -1030,26 +1118,28 @@ fun SettingsScreen(
                             ) {
                                 Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Backup to Cloud", fontSize = 12.sp)
+                                Text("Backup", fontSize = 12.sp)
                             }
 
                             OutlinedButton(
                                 onClick = {
                                     coroutineScope.launch {
                                         isSyncBusy = true
-                                        cloudSyncStatus = "Restoring backups from Firestore..."
+                                        cloudSyncStatus = "Merging sessions from Firestore..."
                                         val syncRepo = CloudSyncRepository(context)
                                         val res = withContext(Dispatchers.IO) {
-                                            syncRepo.restoreAll(user.uid)
+                                            syncRepo.fetchRawBackups(user.uid)
                                         }
-                                        res.onSuccess { restored ->
-                                            withContext(Dispatchers.IO) {
+                                        res.onSuccess { (sessionBackups, doubtBackups) ->
+                                            val stats = withContext(Dispatchers.IO) {
                                                 val repo = ListeningStateManager.getRepository(context)
-                                                restored.sessions.forEach { repo.saveSession(it) }
-                                                restored.doubts.forEach { repo.saveDoubt(it) }
+                                                repo.mergeRemoteSnapshot(
+                                                    remoteSessions = sessionBackups.map { it.toRoomEntity() },
+                                                    remoteDoubts = doubtBackups.map { it.toRoomEntity() }
+                                                )
                                             }
                                             AppPreferencesManager.recordCloudSync(context)
-                                            cloudSyncStatus = "Restored ${restored.doubts.size} doubts & ${restored.sessions.size} sessions"
+                                            cloudSyncStatus = "Merged ${stats.sessionsInserted} new sessions, ${stats.doubtsInserted} new doubts"
                                             Toast.makeText(context, cloudSyncStatus, Toast.LENGTH_SHORT).show()
                                         }.onFailure { err ->
                                             cloudSyncStatus = "Restore failed: ${err.localizedMessage ?: "Permission or network error"}"
@@ -1070,7 +1160,7 @@ fun SettingsScreen(
                             OutlinedButton(
                                 onClick = {
                                     coroutineScope.launch {
-                                        GoogleAuthHelper.signOut(context)
+                                        CloudSyncManager.signOut(context)
                                         currentUser = null
                                         cloudSyncStatus = "Signed out"
                                     }

@@ -25,6 +25,9 @@ interface ConversationSessionDao {
     @Query("SELECT * FROM conversation_sessions WHERE id = :id LIMIT 1")
     suspend fun getSessionById(id: Long): ConversationSession?
 
+    @Query("SELECT * FROM conversation_sessions WHERE cloudId = :cloudId LIMIT 1")
+    suspend fun getSessionByCloudId(cloudId: String): ConversationSession?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSession(session: ConversationSession): Long
 
@@ -33,6 +36,9 @@ interface ConversationSessionDao {
 
     @Query("DELETE FROM conversation_sessions WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM conversation_sessions WHERE cloudId = :cloudId")
+    suspend fun deleteByCloudId(cloudId: String)
 
     @Query("DELETE FROM conversation_sessions WHERE endTime < :cutoffTimestamp")
     suspend fun deleteOlderThan(cutoffTimestamp: Long): Int

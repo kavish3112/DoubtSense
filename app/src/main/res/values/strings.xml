@@ -52,4 +52,12 @@
     <string name="chat_voice_cancel_cd">Cancel voice recording</string>
     <string name="chat_voice_transcribing">Transcribing spoken question…</string>
     <string name="chat_composer_placeholder">Ask a question or tap mic for hands-free…</string>
+    <string name="cloud_sync_card_title">Cross-Device Cloud Sync</string>
+    <string name="cloud_sync_sign_in">Sign in with Google</string>
+    <string name="cloud_sync_now">Sync Now</string>
+    <string name="cloud_sync_continue_in_chat">Continue</string>
+    <string name="cloud_sync_status_signed_out">Sign in with Google to sync chat sessions across your devices</string>
+    <string name="cloud_sync_status_syncing">Syncing chat sessions across devices…</string>
+    <string name="cloud_sync_status_synced">Synced across devices</string>
+    <string name="cloud_sync_status_offline">Cloud sync paused (Offline Mode or Auto-Sync off)</string>
 </resources>

@@ -1478,6 +1478,174 @@ class ExampleUnitTest {
     assertEquals("", ListeningStateManager.liveTranscript.value)
     assertEquals(0f, ListeningStateManager.audioRms.value, 0.001f)
   }
+
+  @Test
+  fun firestoreSessionAndDoubtBackup_fullFidelityMappingAndWriteMapsExcludeIdAndFilterNulls() {
+    val session = com.example.data.model.ConversationSession(
+      id = 5L,
+      startTime = 1_760_900_000_000L,
+      endTime = 1_760_900_060_000L,
+      title = "Distributed Consensus & Raft",
+      category = "Distributed Systems",
+      transcriptJson = com.example.data.model.ConversationSession.encodeTranscriptTurns(
+        listOf("Speaker: Raft uses randomized timeouts.", "Me: How does Raft prevent split brain?")
+      ),
+      transcriptPreview = "Me: How does Raft prevent split brain?",
+      averageDoubtIntensity = 0.76f,
+      peakDoubtIntensity = 0.91f,
+      doubtCount = 2,
+      summary = "Strict majority quorum prevents dual leaders.",
+      customTag = "Work, Study",
+      isPinned = true,
+      cloudId = "session_deviceA_001",
+      updatedAtMillis = 1_760_900_065_000L
+    )
+
+    val doubt = DoubtItem(
+      id = 12L,
+      sessionId = 5L,
+      timestamp = 1_760_900_030_000L,
+      doubtSnippet = "How does Raft prevent split brain?",
+      topic = "Raft Majority Quorum",
+      quickAnswer = "A leader needs votes from more than N/2 nodes.",
+      detailedAnswer = "Two majorities always overlap in at least one node.",
+      notificationSummary = "Majority quorum stops split brain.",
+      conversationalContext = "Raft leader election discussion",
+      confidenceScore = 0.92f,
+      isStarred = true,
+      subject = "Distributed Systems",
+      importantConcepts = "Quorum, Leader Election, Term",
+      doubtType = "Mechanism",
+      intent = "Understand consensus safety",
+      isAmbiguous = false,
+      isFactChecked = true,
+      verificationStatus = "Verified via 1 Source",
+      verificationSourcesJson = DoubtItem.encodeVerificationSources(
+        listOf(
+          com.example.data.model.VerificationSource(
+            title = "Raft Paper",
+            url = "https://raft.github.io/",
+            excerpt = "Election safety property."
+          )
+        )
+      ),
+      customTag = "Work, Study",
+      oneSentenceSummary = "Strict majority quorums prevent dual Raft leaders.",
+      cloudId = "doubt_deviceA_001",
+      sessionCloudId = session.cloudId,
+      updatedAtMillis = 1_760_900_035_000L
+    )
+
+    val sessionBackup = com.example.data.remote.FirestoreSessionBackup.fromRoomEntity(session)
+    val sessionCreateMap = sessionBackup.toCreateMap()
+    assertFalse("Document ID must never be written inside payload", sessionCreateMap.containsKey("id"))
+    assertEquals("session_deviceA_001", sessionCreateMap["cloudId"])
+    assertEquals(1_760_900_000_000L, sessionCreateMap["startTime"])
+    assertEquals(1_760_900_060_000L, sessionCreateMap["endTime"])
+    assertEquals(2L, sessionCreateMap["doubtCount"])
+    assertEquals(true, sessionCreateMap["isPinned"])
+    assertEquals(1_760_900_065_000L, sessionCreateMap["updatedAtMillis"])
+    assertEquals(com.google.firebase.firestore.FieldValue.serverTimestamp(), sessionCreateMap["createdAt"])
+    assertEquals(com.google.firebase.firestore.FieldValue.serverTimestamp(), sessionCreateMap["updatedAt"])
+
+    val restoredSession = sessionBackup.toRoomEntity()
+    assertEquals(session.cloudId, restoredSession.cloudId)
+    assertEquals(session.startTime, restoredSession.startTime)
+    assertEquals(session.endTime, restoredSession.endTime)
+    assertEquals(session.averageDoubtIntensity, restoredSession.averageDoubtIntensity, 0.001f)
+    assertEquals(session.peakDoubtIntensity, restoredSession.peakDoubtIntensity, 0.001f)
+    assertEquals(session.doubtCount, restoredSession.doubtCount)
+    assertEquals(session.summary, restoredSession.summary)
+    assertEquals(session.customTag, restoredSession.customTag)
+    assertEquals(session.isPinned, restoredSession.isPinned)
+    assertEquals(session.updatedAtMillis, restoredSession.updatedAtMillis)
+
+    val doubtBackup = com.example.data.remote.FirestoreDoubtBackup.fromRoomEntity(doubt)
+    val doubtCreateMap = doubtBackup.toCreateMap()
+    assertFalse("Document ID must never be written inside payload", doubtCreateMap.containsKey("id"))
+    assertEquals("doubt_deviceA_001", doubtCreateMap["cloudId"])
+    assertEquals("session_deviceA_001", doubtCreateMap["sessionCloudId"])
+    assertEquals("A leader needs votes from more than N/2 nodes.", doubtCreateMap["quickAnswer"])
+    assertEquals(true, doubtCreateMap["isFactChecked"])
+    assertEquals(com.google.firebase.firestore.FieldValue.serverTimestamp(), doubtCreateMap["updatedAt"])
+
+    val restoredDoubt = doubtBackup.toRoomEntity()
+    assertEquals(doubt.cloudId, restoredDoubt.cloudId)
+    assertEquals(doubt.sessionCloudId, restoredDoubt.sessionCloudId)
+    assertEquals(doubt.quickAnswer, restoredDoubt.quickAnswer)
+    assertEquals(doubt.detailedAnswer, restoredDoubt.detailedAnswer)
+    assertEquals(doubt.subject, restoredDoubt.subject)
+    assertTrue(restoredDoubt.isFactChecked)
+    assertEquals(1, restoredDoubt.getVerificationSources().size)
+  }
+
+  @Test
+  fun conversationSession_cloudIdGenerationAndSanitization_preventsCollisionsAndInvalidDocIds() {
+    val first = com.example.data.model.ConversationSession.newCloudId("session")
+    val second = com.example.data.model.ConversationSession.newCloudId("session")
+    assertTrue(first.startsWith("session_"))
+    assertTrue(second.startsWith("session_"))
+    assertTrue("Generated cloudIds must be unique", first != second)
+    assertTrue(com.example.data.model.ConversationSession.isValidCloudId(first))
+    assertTrue(com.example.data.model.ConversationSession.isValidCloudId(second))
+
+    val sanitized = com.example.data.model.ConversationSession.sanitizeCloudId("bad doc id / with spaces!")
+    assertTrue(com.example.data.model.ConversationSession.isValidCloudId(sanitized))
+    assertFalse(sanitized.contains(" "))
+    assertFalse(sanitized.contains("/"))
+  }
+
+  @Test
+  fun listeningStateManager_restoreSessionIntoLiveChat_repopulatesTurnsDoubtsAndHighlights() {
+    ListeningStateManager.clearTranscript()
+    val session = com.example.data.model.ConversationSession(
+      id = 77L,
+      startTime = 1_760_910_000_000L,
+      endTime = 1_760_910_120_000L,
+      title = "Thermodynamics Synced Session",
+      category = "Physics",
+      customTag = "Study",
+      transcriptJson = com.example.data.model.ConversationSession.encodeTranscriptTurns(
+        listOf(
+          "Speaker: Heated air molecules move faster.",
+          "Me: Wait, why does warm air actually rise?"
+        )
+      ),
+      averageDoubtIntensity = 0.72f,
+      peakDoubtIntensity = 0.85f,
+      doubtCount = 1,
+      summary = "Thermal expansion decreases density."
+    )
+    val linkedDoubt = DoubtItem(
+      id = 88L,
+      sessionId = 77L,
+      sessionCloudId = session.cloudId,
+      doubtSnippet = "Wait, why does warm air actually rise?",
+      topic = "Convection & Buoyancy",
+      subject = "Physics",
+      quickAnswer = "Warm air is less dense than cooler air.",
+      detailedAnswer = "Density decreases as temperature rises at constant pressure.",
+      notificationSummary = "Warm air rises via buoyancy.",
+      confidenceScore = 0.85f
+    )
+
+    ListeningStateManager.restoreSessionIntoLiveChat(session, listOf(linkedDoubt))
+
+    assertEquals(77L, ListeningStateManager.activeSessionId.value)
+    assertEquals(2, ListeningStateManager.conversationHistory.value.size)
+    assertEquals(2, ListeningStateManager.liveChatTurns.value.size)
+    assertEquals(
+      com.example.service.ChatTurnHighlightState.DOUBT_CONFIRMED,
+      ListeningStateManager.liveChatTurns.value.last().highlightState
+    )
+    assertEquals(88L, ListeningStateManager.latestDetectedDoubt.value?.id)
+    val snapshot = ListeningStateManager.getLiveSessionAnalysisSnapshot()
+    assertNotNull(snapshot)
+    assertEquals("Thermodynamics Synced Session", snapshot!!.title)
+    assertEquals(1, snapshot.doubtCount)
+
+    ListeningStateManager.clearTranscript()
+  }
 }
 
 

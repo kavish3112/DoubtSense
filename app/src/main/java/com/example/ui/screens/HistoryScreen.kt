@@ -38,6 +38,8 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Forum
@@ -45,6 +47,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TableChart
 import androidx.compose.material.icons.filled.Topic
 import androidx.compose.material3.AlertDialog
@@ -52,6 +55,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
@@ -68,6 +72,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -93,6 +98,10 @@ import com.example.R
 import com.example.ai.AnswerEngine
 import com.example.data.model.ConversationSession
 import com.example.data.model.DoubtItem
+import com.example.data.remote.CloudSyncManager
+import com.example.data.remote.CloudSyncUiState
+import com.example.data.remote.GoogleAuthHelper
+import com.example.data.remote.GoogleSignInOutcome
 import com.example.data.repository.DoubtRepository
 import com.example.service.ListeningStateManager
 import com.example.ui.components.DoubtCard
@@ -102,6 +111,7 @@ import com.example.ui.components.SessionDetailPane
 import com.example.ui.components.SessionLogCard
 import com.example.ui.components.SwipeToDeleteContainer
 import com.example.ui.components.tagAccentColor
+import com.example.ui.theme.AmberWarning
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.EmeraldSuccess
 import com.example.ui.theme.NeonViolet
@@ -135,6 +145,7 @@ fun HistoryScreen(
     initialTagFilter: String? = null,
     onClearInitialTag: () -> Unit = {},
     onRevisitDoubtInAnswerEngine: (DoubtItem) -> Unit = {},
+    onContinueSessionInChat: (ConversationSession) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -144,8 +155,11 @@ fun HistoryScreen(
     val allSessions by repository.allSessions.collectAsState(initial = emptyList())
     val customTags by AppPreferencesManager.customTags.collectAsState()
     val aiLanguage by AppPreferencesManager.aiResponseLanguage.collectAsState()
+    val cloudSyncState by CloudSyncManager.syncState.collectAsState()
     val answerEngine = remember { AnswerEngine() }
     val coroutineScope = rememberCoroutineScope()
+    var isAuthActionBusy by remember { mutableStateOf(false) }
+    var authActionMessage by remember { mutableStateOf<String?>(null) }
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember(initialCategoryFilter) { mutableStateOf(initialCategoryFilter) }
@@ -534,7 +548,7 @@ fun HistoryScreen(
                 .testTag("history_search_input")
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Segmented Switch: Sessions | Doubts
         Row(
@@ -835,25 +849,72 @@ fun HistoryScreen(
             val useExpandedListDetail = maxWidth >= 840.dp
 
             if (selectedTab == 0) {
-                if (filteredSessions.isEmpty()) {
-                    EmptyHistoryState(
-                        isFilterActive = isFilterActive,
-                        emptyTitle = "No past conversation sessions recorded",
-                        emptyBody = "Speak in Live Sense or ask in Answer Engine to store sessions and revisit past AI-generated answers here.",
-                        searchQuery = searchQuery,
-                        onResetFilters = {
-                            searchQuery = ""
-                            selectedCategory = null
-                            selectedTagFilter = null
-                            dateFilter = DateFilterOption.ALL
-                            showOnlyStarred = false
-                            onClearInitialCategory()
-                            onClearInitialTag()
+                val syncBanner: @Composable () -> Unit = {
+                    HistoryCloudSyncBanner(
+                        cloudSyncState = cloudSyncState,
+                        isAuthActionBusy = isAuthActionBusy,
+                        authActionMessage = authActionMessage,
+                        onSignInClick = {
+                            val auth = CloudSyncManager.resolveFirebaseAuthOrNull()
+                            if (auth == null) {
+                                authActionMessage = "Google Sign-In unavailable in this environment."
+                            } else {
+                                coroutineScope.launch {
+                                    isAuthActionBusy = true
+                                    when (val outcome = GoogleAuthHelper.signInInteractive(context, auth)) {
+                                        is GoogleSignInOutcome.Success -> {
+                                            authActionMessage = null
+                                            CloudSyncManager.bindAuthenticatedSession(context, repository, outcome.user)
+                                        }
+                                        is GoogleSignInOutcome.Cancelled -> {
+                                            authActionMessage = "Sign-in cancelled"
+                                        }
+                                        is GoogleSignInOutcome.Error -> {
+                                            authActionMessage = outcome.message
+                                        }
+                                    }
+                                    isAuthActionBusy = false
+                                }
+                            }
                         },
-                        onSeedSamples = { ListeningStateManager.seedSampleSessions(context) },
-                        showSeedButton = allSessions.isEmpty(),
-                        modifier = Modifier.fillMaxSize()
+                        onSyncNowClick = {
+                            coroutineScope.launch {
+                                isAuthActionBusy = true
+                                val res = CloudSyncManager.syncNow(context)
+                                res.onFailure { err ->
+                                    authActionMessage = err.localizedMessage
+                                }
+                                isAuthActionBusy = false
+                            }
+                        }
                     )
+                }
+
+                if (filteredSessions.isEmpty()) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        syncBanner()
+                        Spacer(modifier = Modifier.height(6.dp))
+                        EmptyHistoryState(
+                            isFilterActive = isFilterActive,
+                            emptyTitle = "No past conversation sessions recorded",
+                            emptyBody = "Speak in Live Sense or ask in Answer Engine to store sessions and revisit past AI-generated answers here.",
+                            searchQuery = searchQuery,
+                            onResetFilters = {
+                                searchQuery = ""
+                                selectedCategory = null
+                                selectedTagFilter = null
+                                dateFilter = DateFilterOption.ALL
+                                showOnlyStarred = false
+                                onClearInitialCategory()
+                                onClearInitialTag()
+                            },
+                            onSeedSamples = { ListeningStateManager.seedSampleSessions(context) },
+                            showSeedButton = allSessions.isEmpty(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                        )
+                    }
                 } else if (useExpandedListDetail) {
                     Row(
                         modifier = Modifier.fillMaxSize(),
@@ -936,6 +997,9 @@ fun HistoryScreen(
                                     )
                                 }
                             }
+                            item(key = "history_cloud_sync_banner") {
+                                syncBanner()
+                            }
                             item { Spacer(modifier = Modifier.height(24.dp)) }
                         }
 
@@ -969,6 +1033,7 @@ fun HistoryScreen(
                             onSaveSessionAsPdf = { s ->
                                 launchSaveSession(s, ExportDocumentFormat.PDF)
                             },
+                            onContinueInChat = onContinueSessionInChat,
                             onClearSelection = { selectedSessionIdForDetail = null },
                             modifier = Modifier
                                 .weight(0.55f)
@@ -1054,6 +1119,9 @@ fun HistoryScreen(
                                 )
                             }
                         }
+                        item(key = "history_cloud_sync_banner") {
+                            syncBanner()
+                        }
                         item { Spacer(modifier = Modifier.height(24.dp)) }
                     }
 
@@ -1089,31 +1157,79 @@ fun HistoryScreen(
                             onSaveSessionAsPdf = { s ->
                                 launchSaveSession(s, ExportDocumentFormat.PDF)
                             },
+                            onContinueInChat = onContinueSessionInChat,
                             onDismiss = { selectedSessionIdForDetail = null }
                         )
                     }
                 }
             } else {
-                if (filteredDoubts.isEmpty()) {
-                    EmptyHistoryState(
-                        isFilterActive = isFilterActive,
-                        emptyTitle = "No doubts in log yet",
-                        emptyBody = "Detected doubts, quick answers, and references will appear here automatically.",
-                        searchQuery = searchQuery,
-                        onResetFilters = {
-                            searchQuery = ""
-                            selectedCategory = null
-                            selectedTagFilter = null
-                            selectedTopic = null
-                            dateFilter = DateFilterOption.ALL
-                            showOnlyStarred = false
-                            showOnlyAmbiguous = false
-                            onClearInitialCategory()
+                val syncBanner: @Composable () -> Unit = {
+                    HistoryCloudSyncBanner(
+                        cloudSyncState = cloudSyncState,
+                        isAuthActionBusy = isAuthActionBusy,
+                        authActionMessage = authActionMessage,
+                        onSignInClick = {
+                            val auth = CloudSyncManager.resolveFirebaseAuthOrNull()
+                            if (auth == null) {
+                                authActionMessage = "Google Sign-In unavailable in this environment."
+                            } else {
+                                coroutineScope.launch {
+                                    isAuthActionBusy = true
+                                    when (val outcome = GoogleAuthHelper.signInInteractive(context, auth)) {
+                                        is GoogleSignInOutcome.Success -> {
+                                            authActionMessage = null
+                                            CloudSyncManager.bindAuthenticatedSession(context, repository, outcome.user)
+                                        }
+                                        is GoogleSignInOutcome.Cancelled -> {
+                                            authActionMessage = "Sign-in cancelled"
+                                        }
+                                        is GoogleSignInOutcome.Error -> {
+                                            authActionMessage = outcome.message
+                                        }
+                                    }
+                                    isAuthActionBusy = false
+                                }
+                            }
                         },
-                        onSeedSamples = { ListeningStateManager.seedSampleSessions(context) },
-                        showSeedButton = allDoubts.isEmpty(),
-                        modifier = Modifier.fillMaxSize()
+                        onSyncNowClick = {
+                            coroutineScope.launch {
+                                isAuthActionBusy = true
+                                val res = CloudSyncManager.syncNow(context)
+                                res.onFailure { err ->
+                                    authActionMessage = err.localizedMessage
+                                }
+                                isAuthActionBusy = false
+                            }
+                        }
                     )
+                }
+
+                if (filteredDoubts.isEmpty()) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        syncBanner()
+                        Spacer(modifier = Modifier.height(6.dp))
+                        EmptyHistoryState(
+                            isFilterActive = isFilterActive,
+                            emptyTitle = "No doubts in log yet",
+                            emptyBody = "Detected doubts, quick answers, and references will appear here automatically.",
+                            searchQuery = searchQuery,
+                            onResetFilters = {
+                                searchQuery = ""
+                                selectedCategory = null
+                                selectedTagFilter = null
+                                selectedTopic = null
+                                dateFilter = DateFilterOption.ALL
+                                showOnlyStarred = false
+                                showOnlyAmbiguous = false
+                                onClearInitialCategory()
+                            },
+                            onSeedSamples = { ListeningStateManager.seedSampleSessions(context) },
+                            showSeedButton = allDoubts.isEmpty(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                        )
+                    }
                 } else {
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
@@ -1177,6 +1293,9 @@ fun HistoryScreen(
                                     }
                                 )
                             }
+                        }
+                        item(key = "history_cloud_sync_banner") {
+                            syncBanner()
                         }
                         item { Spacer(modifier = Modifier.height(24.dp)) }
                     }
@@ -1488,6 +1607,138 @@ private fun HistoryTagManagerDialog(
                     ) {
                         Text("Done", fontWeight = FontWeight.Bold)
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryCloudSyncBanner(
+    cloudSyncState: CloudSyncUiState,
+    isAuthActionBusy: Boolean,
+    authActionMessage: String?,
+    onSignInClick: () -> Unit,
+    onSyncNowClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = when (cloudSyncState) {
+            is CloudSyncUiState.Synced -> EmeraldSuccess.copy(alpha = 0.12f)
+            is CloudSyncUiState.Error -> RoseError.copy(alpha = 0.12f)
+            is CloudSyncUiState.Syncing -> ElectricCyan.copy(alpha = 0.14f)
+            else -> MaterialTheme.colorScheme.surfaceVariant
+        },
+        border = BorderStroke(
+            1.dp,
+            when (cloudSyncState) {
+                is CloudSyncUiState.Synced -> EmeraldSuccess.copy(alpha = 0.4f)
+                is CloudSyncUiState.Error -> RoseError.copy(alpha = 0.45f)
+                is CloudSyncUiState.Syncing -> ElectricCyan.copy(alpha = 0.45f)
+                else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+            }
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("history_cloud_sync_card")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                when (cloudSyncState) {
+                    is CloudSyncUiState.Syncing -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = ElectricCyan
+                        )
+                    }
+                    is CloudSyncUiState.Synced -> {
+                        Icon(
+                            imageVector = Icons.Default.CloudDone,
+                            contentDescription = stringResource(R.string.cloud_sync_status_synced),
+                            tint = EmeraldSuccess,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    is CloudSyncUiState.Error -> {
+                        Icon(
+                            imageVector = Icons.Default.CloudOff,
+                            contentDescription = "Cloud sync error",
+                            tint = RoseError,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    else -> {
+                        Icon(
+                            imageVector = Icons.Default.CloudOff,
+                            contentDescription = stringResource(R.string.cloud_sync_status_signed_out),
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                val titleText = when (val st = cloudSyncState) {
+                    is CloudSyncUiState.Synced ->
+                        "Synced across devices${st.userEmail?.let { " • $it" } ?: ""}"
+                    is CloudSyncUiState.Syncing -> st.message
+                    is CloudSyncUiState.OfflinePaused ->
+                        "Sync paused${st.userEmail?.let { " ($it)" } ?: ""}"
+                    is CloudSyncUiState.Error -> st.message
+                    CloudSyncUiState.SignedOut ->
+                        authActionMessage ?: stringResource(R.string.cloud_sync_status_signed_out)
+                }
+                Text(
+                    text = titleText,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    maxLines = 2
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            if (cloudSyncState is CloudSyncUiState.SignedOut) {
+                FilledTonalButton(
+                    onClick = onSignInClick,
+                    enabled = !isAuthActionBusy,
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = ElectricCyan.copy(alpha = 0.2f),
+                        contentColor = ElectricCyan
+                    ),
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("history_google_signin_button")
+                ) {
+                    Text(stringResource(R.string.cloud_sync_sign_in), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onSyncNowClick,
+                    enabled = !isAuthActionBusy && cloudSyncState !is CloudSyncUiState.Syncing,
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("history_sync_now_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Sync,
+                        contentDescription = stringResource(R.string.cloud_sync_now),
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(stringResource(R.string.cloud_sync_now), fontSize = 11.sp)
                 }
             }
         }

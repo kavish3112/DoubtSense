@@ -2756,6 +2756,270 @@ class ExampleRobolectricTest {
 
     ListeningStateManager.clearTranscript()
   }
+
+  @Test
+  @Config(sdk = [34])
+  fun `doubtDatabase migration 5 to 6 preserves legacy sessions and doubts with unique cloudIds`() {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    val dbName = "test_migration_5_to_6_${System.nanoTime()}.db"
+    val dbFile = app.getDatabasePath(dbName)
+    dbFile.parentFile?.mkdirs()
+
+    // Create a v5 database using SQLite directly
+    val rawDb = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(dbFile, null)
+    rawDb.execSQL(
+      """
+      CREATE TABLE IF NOT EXISTS `conversation_sessions` (
+        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+        `startTime` INTEGER NOT NULL,
+        `endTime` INTEGER NOT NULL,
+        `title` TEXT NOT NULL,
+        `category` TEXT NOT NULL,
+        `transcriptJson` TEXT NOT NULL,
+        `transcriptPreview` TEXT NOT NULL,
+        `averageDoubtIntensity` REAL NOT NULL,
+        `peakDoubtIntensity` REAL NOT NULL,
+        `doubtCount` INTEGER NOT NULL,
+        `summary` TEXT NOT NULL,
+        `customTag` TEXT NOT NULL,
+        `isPinned` INTEGER NOT NULL
+      )
+      """.trimIndent()
+    )
+    rawDb.execSQL(
+      """
+      CREATE TABLE IF NOT EXISTS `doubts` (
+        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+        `sessionId` INTEGER NOT NULL,
+        `timestamp` INTEGER NOT NULL,
+        `doubtSnippet` TEXT NOT NULL,
+        `topic` TEXT NOT NULL,
+        `quickAnswer` TEXT NOT NULL,
+        `detailedAnswer` TEXT NOT NULL,
+        `notificationSummary` TEXT NOT NULL,
+        `conversationalContext` TEXT NOT NULL,
+        `isAmbiguous` INTEGER NOT NULL,
+        `clarificationQuestion` TEXT,
+        `confidenceScore` REAL NOT NULL,
+        `isStarred` INTEGER NOT NULL,
+        `subject` TEXT NOT NULL,
+        `importantConcepts` TEXT NOT NULL,
+        `doubtType` TEXT NOT NULL,
+        `intent` TEXT NOT NULL,
+        `suggestedOptionsJson` TEXT NOT NULL,
+        `referenceMaterials` TEXT NOT NULL,
+        `conversationSuggestions` TEXT NOT NULL,
+        `userClarificationResponse` TEXT,
+        `clarificationHistory` TEXT NOT NULL,
+        `preferredStyle` TEXT NOT NULL,
+        `clarificationMode` TEXT NOT NULL,
+        `isResolvedWithClarification` INTEGER NOT NULL,
+        `isFactChecked` INTEGER NOT NULL,
+        `verificationStatus` TEXT NOT NULL,
+        `verificationSourcesJson` TEXT NOT NULL,
+        `customTag` TEXT NOT NULL,
+        `oneSentenceSummary` TEXT NOT NULL
+      )
+      """.trimIndent()
+    )
+    rawDb.execSQL(
+      """
+      INSERT INTO `conversation_sessions`
+      (`id`, `startTime`, `endTime`, `title`, `category`, `transcriptJson`, `transcriptPreview`, `averageDoubtIntensity`, `peakDoubtIntensity`, `doubtCount`, `summary`, `customTag`, `isPinned`)
+      VALUES (1, 1760000000000, 1760000060000, 'Legacy V5 Session', 'Physics', '["Why is sky blue?"]', 'Why is sky blue?', 0.75, 0.88, 1, 'Rayleigh scattering summary', 'Study', 1)
+      """.trimIndent()
+    )
+    rawDb.execSQL(
+      """
+      INSERT INTO `doubts`
+      (`id`, `sessionId`, `timestamp`, `doubtSnippet`, `topic`, `quickAnswer`, `detailedAnswer`, `notificationSummary`, `conversationalContext`, `isAmbiguous`, `clarificationQuestion`, `confidenceScore`, `isStarred`, `subject`, `importantConcepts`, `doubtType`, `intent`, `suggestedOptionsJson`, `referenceMaterials`, `conversationSuggestions`, `userClarificationResponse`, `clarificationHistory`, `preferredStyle`, `clarificationMode`, `isResolvedWithClarification`, `isFactChecked`, `verificationStatus`, `verificationSourcesJson`, `customTag`, `oneSentenceSummary`)
+      VALUES (1, 1, 1760000030000, 'Why is sky blue?', 'Rayleigh Scattering', 'Short waves scatter more.', 'Detailed Rayleigh explanation.', 'Blue light scatters.', 'Physics class', 0, NULL, 0.88, 1, 'Physics', 'Wavelength', 'Cause', 'Learn optics', '[]', '', '', NULL, '', 'Detailed', 'PRIVATE', 0, 0, '', '[]', 'Study', 'Short blue wavelengths scatter most.')
+      """.trimIndent()
+    )
+    rawDb.version = 5
+    rawDb.close()
+
+    val migratedDb = androidx.room.Room.databaseBuilder(
+      app,
+      com.example.data.local.DoubtDatabase::class.java,
+      dbName
+    )
+      .addMigrations(com.example.data.local.DoubtDatabase.MIGRATION_5_6)
+      .allowMainThreadQueries()
+      .build()
+
+    try {
+      val sessions = kotlinx.coroutines.runBlocking { migratedDb.conversationSessionDao().getAllSessionsOnce() }
+      val doubts = kotlinx.coroutines.runBlocking { migratedDb.doubtDao().getAllDoubtsOnce() }
+      assertEquals(1, sessions.size)
+      assertEquals(1, doubts.size)
+      val migratedSession = sessions.first()
+      val migratedDoubt = doubts.first()
+      assertEquals("Legacy V5 Session", migratedSession.title)
+      assertTrue(com.example.data.model.ConversationSession.isValidCloudId(migratedSession.cloudId))
+      assertTrue(com.example.data.model.ConversationSession.isValidCloudId(migratedDoubt.cloudId))
+      assertEquals(migratedSession.cloudId, migratedDoubt.sessionCloudId)
+      assertEquals(1760000060000L, migratedSession.updatedAtMillis)
+    } finally {
+      migratedDb.close()
+      dbFile.delete()
+    }
+  }
+
+  @Test
+  @Config(sdk = [34])
+  fun `doubtRepository mergeRemoteSnapshot merges multi-device sessions without ID collisions or duplicates`(): Unit = kotlinx.coroutines.runBlocking {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    val repo = ListeningStateManager.getRepository(app)
+    repo.clearAll()
+
+    val seedTime = System.currentTimeMillis()
+    val deviceASessionId = repo.saveSession(
+      com.example.data.model.ConversationSession(
+        startTime = seedTime - 60_000L,
+        endTime = seedTime,
+        title = "Device A Local Session",
+        category = "Computer Science",
+        customTag = "Study",
+        cloudId = "session_devA_1",
+        updatedAtMillis = seedTime
+      )
+    )
+    repo.saveDoubt(
+      DoubtItem(
+        sessionId = deviceASessionId,
+        timestamp = seedTime - 30_000L,
+        doubtSnippet = "How does B-tree balancing work?",
+        topic = "B-Trees",
+        quickAnswer = "Splits full nodes upward.",
+        detailedAnswer = "All leaves stay at uniform depth.",
+        notificationSummary = "B-Trees keep balanced height.",
+        cloudId = "doubt_devA_1",
+        sessionCloudId = "session_devA_1",
+        updatedAtMillis = seedTime
+      )
+    )
+    val now = System.currentTimeMillis().coerceAtLeast(seedTime)
+
+    // Simulated snapshot from Firestore originating from Device B (notice localId=1 collides with Device A's id=1!)
+    // plus a newer tag update for Device A's session
+    val remoteSessions = listOf(
+      com.example.data.model.ConversationSession(
+        id = 1L, // Same local Room PK as Device A!
+        startTime = now + 10_000L,
+        endTime = now + 20_000L,
+        title = "Device B Architecture Discussion",
+        category = "Systems",
+        customTag = "Work",
+        summary = "Discussed event-driven queues.",
+        cloudId = "session_devB_1",
+        updatedAtMillis = now + 20_000L
+      ),
+      com.example.data.model.ConversationSession(
+        id = 1L,
+        startTime = seedTime - 60_000L,
+        endTime = seedTime,
+        title = "Device A Local Session",
+        category = "Computer Science",
+        customTag = "Work, Study",
+        cloudId = "session_devA_1",
+        updatedAtMillis = now + 30_000L
+      )
+    )
+    val remoteDoubts = listOf(
+      DoubtItem(
+        id = 1L,
+        sessionId = 0L,
+        timestamp = now + 15_000L,
+        doubtSnippet = "Why use dead-letter queues?",
+        topic = "Message Queues",
+        quickAnswer = "Isolate poison messages for retry inspection.",
+        detailedAnswer = "Prevents failing messages from blocking consumer partitions.",
+        notificationSummary = "DLQs isolate poison pills.",
+        cloudId = "doubt_devB_1",
+        sessionCloudId = "session_devB_1",
+        updatedAtMillis = now + 15_000L
+      )
+    )
+
+    val stats = repo.mergeRemoteSnapshot(remoteSessions, remoteDoubts)
+    assertEquals(1, stats.sessionsInserted)
+    assertEquals(1, stats.sessionsUpdated)
+    assertEquals(1, stats.doubtsInserted)
+
+    val allSessions = repo.getAllSessionsOnce()
+    assertEquals(2, allSessions.size)
+    val devA = allSessions.first { it.cloudId == "session_devA_1" }
+    val devB = allSessions.first { it.cloudId == "session_devB_1" }
+    assertEquals("Work, Study", devA.customTag)
+    assertEquals("Device B Architecture Discussion", devB.title)
+
+    val devBDoubts = repo.getDoubtsForSessionOnce(devB.id)
+    assertEquals(1, devBDoubts.size)
+    assertEquals("doubt_devB_1", devBDoubts.first().cloudId)
+    assertEquals(devB.id, devBDoubts.first().sessionId)
+
+    // Merging identical snapshot a second time is idempotent
+    val secondStats = repo.mergeRemoteSnapshot(remoteSessions, remoteDoubts)
+    assertEquals(0, secondStats.totalChanges)
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "w411dp-h915dp")
+  fun `cloudSyncUi renders sync controls across Dashboard, History, and Settings screens`() {
+    val app = ApplicationProvider.getApplicationContext<Application>()
+    app.getSharedPreferences("doubtsense_prefs", Context.MODE_PRIVATE).edit().clear().apply()
+    com.example.util.AppPreferencesManager.init(app)
+
+    // 1. Dashboard & History Cloud Sync UI pills/cards
+    composeTestRule.setContent {
+      MyApplicationTheme {
+        com.example.ui.DoubtSenseApp(initialDestination = com.example.ui.AppDestination.CONVERSATION)
+      }
+    }
+
+    composeTestRule.waitUntil(timeoutMillis = 6_000L) {
+      Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      try {
+        composeTestRule.onNodeWithTag("dashboard_cloud_sync_pill").assertIsDisplayed()
+        true
+      } catch (_: AssertionError) {
+        false
+      }
+    }
+
+    composeTestRule.onNodeWithTag("nav_history").performClick()
+    composeTestRule.waitUntil(timeoutMillis = 6_000L) {
+      Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      try {
+        composeTestRule.onNodeWithTag("history_cloud_sync_card").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("history_google_signin_button").assertIsDisplayed()
+        true
+      } catch (_: AssertionError) {
+        false
+      }
+    }
+
+    // 2. Settings Auto-Sync switch & Google Sign-In button
+    composeTestRule.onNodeWithTag("nav_settings").performClick()
+    composeTestRule.waitUntil(timeoutMillis = 6_000L) {
+      Shadows.shadowOf(android.os.Looper.getMainLooper()).idle()
+      try {
+        composeTestRule.onNodeWithTag("settings_list")
+          .performScrollToNode(hasTestTag("cloud_sync_card"))
+        true
+      } catch (_: Throwable) {
+        false
+      }
+    }
+
+    composeTestRule.onNodeWithTag("auto_cloud_sync_switch").performScrollTo().assertIsDisplayed()
+    composeTestRule.onNodeWithTag("google_signin_button").performScrollTo().assertIsDisplayed()
+    assertTrue(com.example.util.AppPreferencesManager.autoCloudSyncEnabled.value)
+    composeTestRule.onNodeWithTag("auto_cloud_sync_switch").performClick()
+    composeTestRule.waitForIdle()
+    assertFalse(com.example.util.AppPreferencesManager.autoCloudSyncEnabled.value)
+  }
 }
 
 

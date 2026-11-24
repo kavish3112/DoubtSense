@@ -42,6 +42,7 @@ object AppPreferencesManager {
     private const val KEY_AUTO_CLEANUP_30_DAYS = "auto_cleanup_30_days"
     private const val KEY_CUSTOM_TAGS = "custom_tags_json"
     private const val KEY_LAST_CLOUD_SYNC = "last_cloud_sync_timestamp"
+    private const val KEY_AUTO_CLOUD_SYNC = "auto_cloud_sync_enabled"
 
     val SUPPORTED_LANGUAGES = listOf(
         LanguageOption("English (US)", "English", "en-US", "EN"),
@@ -89,6 +90,9 @@ object AppPreferencesManager {
     private val _lastCloudSyncTimestamp = MutableStateFlow(0L)
     val lastCloudSyncTimestamp: StateFlow<Long> = _lastCloudSyncTimestamp.asStateFlow()
 
+    private val _autoCloudSyncEnabled = MutableStateFlow(true)
+    val autoCloudSyncEnabled: StateFlow<Boolean> = _autoCloudSyncEnabled.asStateFlow()
+
     @Volatile
     private var initialized = false
 
@@ -111,6 +115,7 @@ object AppPreferencesManager {
         _offlineMode.value = prefs.getBoolean(KEY_OFFLINE_MODE, false)
         _autoCleanup30Days.value = prefs.getBoolean(KEY_AUTO_CLEANUP_30_DAYS, false)
         _lastCloudSyncTimestamp.value = prefs.getLong(KEY_LAST_CLOUD_SYNC, 0L)
+        _autoCloudSyncEnabled.value = prefs.getBoolean(KEY_AUTO_CLOUD_SYNC, true)
 
         val tagsJson = prefs.getString(KEY_CUSTOM_TAGS, null)
         if (!tagsJson.isNullOrBlank()) {
@@ -230,6 +235,12 @@ object AppPreferencesManager {
         _lastCloudSyncTimestamp.value = timestampMillis
         context?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             ?.edit()?.putLong(KEY_LAST_CLOUD_SYNC, timestampMillis)?.apply()
+    }
+
+    fun setAutoCloudSyncEnabled(context: Context?, enabled: Boolean) {
+        _autoCloudSyncEnabled.value = enabled
+        context?.applicationContext?.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            ?.edit()?.putBoolean(KEY_AUTO_CLOUD_SYNC, enabled)?.apply()
     }
 
     private fun parseTagsJson(raw: String): List<String> {

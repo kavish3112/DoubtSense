@@ -16,10 +16,12 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 
 sealed interface GoogleSignInOutcome {
     data class Success(val user: FirebaseUser) : GoogleSignInOutcome
@@ -29,12 +31,49 @@ sealed interface GoogleSignInOutcome {
 
 object GoogleAuthHelper {
 
+    fun currentUserOrNull(): FirebaseUser? =
+        runCatching { FirebaseAuth.getInstance().currentUser }.getOrNull()
+
     fun authStateFlow(auth: FirebaseAuth = FirebaseAuth.getInstance()): Flow<FirebaseUser?> = callbackFlow {
         val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
             trySend(firebaseAuth.currentUser)
         }
         auth.addAuthStateListener(listener)
         awaitClose { auth.removeAuthStateListener(listener) }
+    }
+
+    /**
+     * Attempts silent/one-tap sign-in against already authorized Google accounts on the device.
+     * Never presents a blocking modal if no previously authorized account exists.
+     */
+    suspend fun attemptAutoSignIn(
+        activityContext: Context,
+        auth: FirebaseAuth = FirebaseAuth.getInstance()
+    ): GoogleSignInOutcome? {
+        auth.currentUser?.let { return GoogleSignInOutcome.Success(it) }
+        val credentialManager = runCatching { CredentialManager.create(activityContext) }.getOrNull()
+            ?: return null
+        val serverClientId = runCatching { activityContext.getString(R.string.default_web_client_id) }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: return null
+
+        val attempt = trySilentOrAuthorizedGoogleId(credentialManager, activityContext, serverClientId)
+            ?: return null
+        return finishFirebaseCredentialSignIn(attempt, auth)
+    }
+
+    /**
+     * Explicit user-initiated Google Sign-In flow via GetSignInWithGoogleOption.
+     */
+    suspend fun signInInteractive(
+        activityContext: Context,
+        auth: FirebaseAuth = FirebaseAuth.getInstance()
+    ): GoogleSignInOutcome {
+        val credentialManager = CredentialManager.create(activityContext)
+        val serverClientId = activityContext.getString(R.string.default_web_client_id)
+        val attempt = tryExplicitSignInWithGoogle(credentialManager, activityContext, serverClientId)
+        return finishFirebaseCredentialSignIn(attempt, auth)
     }
 
     suspend fun signInWithGoogle(
@@ -44,14 +83,33 @@ object GoogleAuthHelper {
         val credentialManager = CredentialManager.create(activityContext)
         val serverClientId = activityContext.getString(R.string.default_web_client_id)
 
-        // Try authorized accounts first via GetGoogleIdOption, then fall back to explicit GetSignInWithGoogleOption
+        // Single-option requests: check authorized Google accounts first, then explicit Google Sign-In picker
         val idTokenResult = trySilentOrAuthorizedGoogleId(credentialManager, activityContext, serverClientId)
             ?: tryExplicitSignInWithGoogle(credentialManager, activityContext, serverClientId)
 
-        return when (idTokenResult) {
+        return finishFirebaseCredentialSignIn(idTokenResult, auth)
+    }
+
+    suspend fun signOut(
+        context: Context,
+        auth: FirebaseAuth = FirebaseAuth.getInstance(),
+        onBeforeFirebaseSignOut: suspend () -> Unit = {}
+    ) = withContext(NonCancellable) {
+        runCatching { onBeforeFirebaseSignOut() }
+        runCatching { auth.signOut() }
+        runCatching {
+            CredentialManager.create(context).clearCredentialState(ClearCredentialStateRequest())
+        }
+    }
+
+    private suspend fun finishFirebaseCredentialSignIn(
+        tokenAttempt: TokenAttempt,
+        auth: FirebaseAuth
+    ): GoogleSignInOutcome {
+        return when (tokenAttempt) {
             is TokenAttempt.Token -> {
                 try {
-                    val firebaseCred = GoogleAuthProvider.getCredential(idTokenResult.idToken, null)
+                    val firebaseCred = GoogleAuthProvider.getCredential(tokenAttempt.idToken, null)
                     val authResult = auth.signInWithCredential(firebaseCred).await()
                     val user = authResult.user
                     if (user != null) {
@@ -66,17 +124,7 @@ object GoogleAuthHelper {
                 }
             }
             is TokenAttempt.Cancelled -> GoogleSignInOutcome.Cancelled
-            is TokenAttempt.Error -> GoogleSignInOutcome.Error(idTokenResult.message)
-        }
-    }
-
-    suspend fun signOut(
-        context: Context,
-        auth: FirebaseAuth = FirebaseAuth.getInstance()
-    ) {
-        auth.signOut()
-        runCatching {
-            CredentialManager.create(context).clearCredentialState(ClearCredentialStateRequest())
+            is TokenAttempt.Error -> GoogleSignInOutcome.Error(tokenAttempt.message)
         }
     }
 

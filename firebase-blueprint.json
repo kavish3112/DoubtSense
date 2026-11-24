@@ -2,12 +2,20 @@
   "entities": {
     "DoubtBackup": {
       "title": "DoubtBackup",
-      "description": "Cloud-synced doubt item backed up from the local Room database for a user.",
+      "description": "Cloud-synced doubt item backed up and synchronized across devices for a user.",
       "type": "object",
       "properties": {
         "localId": {
           "type": "integer",
-          "description": "Original Room database row ID on the client device."
+          "description": "Original Room database row ID on the originating client device."
+        },
+        "cloudId": {
+          "type": "string",
+          "description": "Collision-free cross-device identifier matching the Firestore document ID."
+        },
+        "sessionCloudId": {
+          "type": "string",
+          "description": "Cross-device cloudId of the parent ConversationSession this doubt belongs to."
         },
         "query": {
           "type": "string",
@@ -15,7 +23,7 @@
         },
         "summary": {
           "type": "string",
-          "description": "Resolved AI summary or explanation."
+          "description": "Resolved AI detailed answer or explanation."
         },
         "oneSentenceSummary": {
           "type": "string",
@@ -23,11 +31,15 @@
         },
         "category": {
           "type": "string",
-          "description": "High-level subject category."
+          "description": "High-level topic label."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Academic or domain subject."
         },
         "customTag": {
           "type": "string",
-          "description": "User-assigned custom label such as Work, Education, or Personal."
+          "description": "Comma-separated custom labels such as Work, Study, or Personal."
         },
         "timestamp": {
           "type": "integer",
@@ -48,6 +60,66 @@
         "followUpCount": {
           "type": "integer",
           "description": "Count of follow-up questions."
+        },
+        "quickAnswer": {
+          "type": "string",
+          "description": "Concise AI answer."
+        },
+        "notificationSummary": {
+          "type": "string",
+          "description": "Short notification takeaway."
+        },
+        "conversationalContext": {
+          "type": "string",
+          "description": "Surrounding conversation context turns."
+        },
+        "importantConcepts": {
+          "type": "string",
+          "description": "Comma-separated key concepts."
+        },
+        "doubtType": {
+          "type": "string",
+          "description": "Classified doubt type."
+        },
+        "intent": {
+          "type": "string",
+          "description": "User intent detected by analysis."
+        },
+        "isAmbiguous": {
+          "type": "boolean",
+          "description": "Whether the doubt triggered interactive clarification."
+        },
+        "clarificationQuestion": {
+          "type": "string",
+          "description": "Follow-up clarification question if ambiguous."
+        },
+        "suggestedOptionsJson": {
+          "type": "string",
+          "description": "JSON array of suggested clarification options."
+        },
+        "referenceMaterials": {
+          "type": "string",
+          "description": "Recommended reading or study references."
+        },
+        "conversationSuggestions": {
+          "type": "string",
+          "description": "Suggested follow-up discussion questions."
+        },
+        "isFactChecked": {
+          "type": "boolean",
+          "description": "Whether grounded external verification sources are attached."
+        },
+        "verificationStatus": {
+          "type": "string",
+          "description": "Summary of external verification status."
+        },
+        "verificationSourcesJson": {
+          "type": "string",
+          "description": "JSON array of verified external URLs and excerpts."
+        },
+        "updatedAtMillis": {
+          "type": "integer",
+          "description": "Client mutation epoch milliseconds used for cross-device merge conflict resolution."
         },
         "createdAt": {
           "type": "string",
@@ -76,12 +148,16 @@
     },
     "SessionBackup": {
       "title": "SessionBackup",
-      "description": "Cloud-synced Answer Engine conversation session backed up from Room.",
+      "description": "Cloud-synced chat and conversation session synchronized across devices for a user.",
       "type": "object",
       "properties": {
         "localId": {
           "type": "integer",
-          "description": "Original Room session row ID."
+          "description": "Original Room session row ID on the originating device."
+        },
+        "cloudId": {
+          "type": "string",
+          "description": "Collision-free cross-device identifier matching the Firestore document ID."
         },
         "title": {
           "type": "string",
@@ -89,15 +165,15 @@
         },
         "answerJson": {
           "type": "string",
-          "description": "Serialized AnswerEngineResult payload."
+          "description": "JSON-encoded conversation transcript turns."
         },
         "customTag": {
           "type": "string",
-          "description": "User-assigned custom tag label."
+          "description": "Comma-separated custom tag labels."
         },
         "category": {
           "type": "string",
-          "description": "Session category."
+          "description": "Session subject category."
         },
         "isPinned": {
           "type": "boolean",
@@ -105,7 +181,39 @@
         },
         "timestamp": {
           "type": "integer",
-          "description": "Epoch milliseconds when the session was saved."
+          "description": "Epoch milliseconds when the session ended/saved."
+        },
+        "startTime": {
+          "type": "integer",
+          "description": "Epoch milliseconds when the session started."
+        },
+        "endTime": {
+          "type": "integer",
+          "description": "Epoch milliseconds when the session ended."
+        },
+        "transcriptPreview": {
+          "type": "string",
+          "description": "Latest turn preview snippet."
+        },
+        "averageDoubtIntensity": {
+          "type": "number",
+          "description": "Average doubt intensity across the session (0.0 to 1.0)."
+        },
+        "peakDoubtIntensity": {
+          "type": "number",
+          "description": "Peak doubt intensity observed in the session (0.0 to 1.0)."
+        },
+        "doubtCount": {
+          "type": "integer",
+          "description": "Number of doubts detected in this session."
+        },
+        "summary": {
+          "type": "string",
+          "description": "Session takeaway summary."
+        },
+        "updatedAtMillis": {
+          "type": "integer",
+          "description": "Client mutation epoch milliseconds used for cross-device merge conflict resolution."
         },
         "createdAt": {
           "type": "string",
@@ -134,13 +242,13 @@
       "schema": {
         "$ref": "#/entities/DoubtBackup"
       },
-      "description": "Per-user backed up DoubtItem records isolated by Firebase Auth UID."
+      "description": "Per-user synced DoubtItem records isolated by Firebase Auth UID."
     },
     "/users/{userId}/sessions/{sessionId}": {
       "schema": {
         "$ref": "#/entities/SessionBackup"
       },
-      "description": "Per-user backed up ConversationSession records isolated by Firebase Auth UID."
+      "description": "Per-user synced ConversationSession records isolated by Firebase Auth UID."
     }
   }
 }

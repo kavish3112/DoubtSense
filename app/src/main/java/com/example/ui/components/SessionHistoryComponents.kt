@@ -587,6 +587,7 @@ fun SessionDetailDialog(
     onRevisitDoubtInAnswerEngine: (DoubtItem) -> Unit = {},
     onSaveSessionAsText: (ConversationSession) -> Unit = {},
     onSaveSessionAsPdf: (ConversationSession) -> Unit = {},
+    onContinueInChat: (ConversationSession) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     Dialog(
@@ -617,6 +618,10 @@ fun SessionDetailDialog(
                 },
                 onSaveSessionAsText = onSaveSessionAsText,
                 onSaveSessionAsPdf = onSaveSessionAsPdf,
+                onContinueInChat = { s ->
+                    onDismiss()
+                    onContinueInChat(s)
+                },
                 onClose = onDismiss
             )
         }
@@ -636,6 +641,7 @@ fun SessionDetailPane(
     onRevisitDoubtInAnswerEngine: (DoubtItem) -> Unit = {},
     onSaveSessionAsText: (ConversationSession) -> Unit = {},
     onSaveSessionAsPdf: (ConversationSession) -> Unit = {},
+    onContinueInChat: (ConversationSession) -> Unit = {},
     onClearSelection: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -691,6 +697,7 @@ fun SessionDetailPane(
                 onRevisitDoubtInAnswerEngine = onRevisitDoubtInAnswerEngine,
                 onSaveSessionAsText = onSaveSessionAsText,
                 onSaveSessionAsPdf = onSaveSessionAsPdf,
+                onContinueInChat = onContinueInChat,
                 onClose = onClearSelection
             )
         }
@@ -711,6 +718,7 @@ private fun SessionDetailBody(
     onRevisitDoubtInAnswerEngine: (DoubtItem) -> Unit,
     onSaveSessionAsText: (ConversationSession) -> Unit,
     onSaveSessionAsPdf: (ConversationSession) -> Unit,
+    onContinueInChat: (ConversationSession) -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1115,6 +1123,18 @@ private fun SessionDetailBody(
                 Icon(Icons.Default.Print, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(6.dp))
                 Text("Print PDF", fontSize = 12.sp)
+            }
+
+            FilledTonalButton(
+                onClick = { onContinueInChat(session) },
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .testTag("session_detail_continue_in_chat_button")
+            ) {
+                Icon(Icons.Default.Forum, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(5.dp))
+                Text("Continue", fontSize = 12.sp)
             }
         }
     }

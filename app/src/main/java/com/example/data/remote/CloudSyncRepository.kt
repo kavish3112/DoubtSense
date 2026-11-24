@@ -11,7 +11,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
-import java.util.UUID
 
 data class CloudBackupSummary(
     val uploadedDoubts: Int,
@@ -36,6 +35,24 @@ class CloudSyncRepository(
     )
 
     companion object {
+        fun isValidCloudId(raw: String): Boolean = ConversationSession.isValidCloudId(raw)
+
+        fun resolveDoubtCloudId(item: DoubtItem): String =
+            ConversationSession.sanitizeCloudId(
+                item.cloudId.ifBlank {
+                    if (item.id > 0L) "doubt_${item.id}" else DoubtItem.newCloudId()
+                },
+                fallbackPrefix = "doubt"
+            )
+
+        fun resolveSessionCloudId(session: ConversationSession): String =
+            ConversationSession.sanitizeCloudId(
+                session.cloudId.ifBlank {
+                    if (session.id > 0L) "session_${session.id}" else ConversationSession.newCloudId("session")
+                },
+                fallbackPrefix = "session"
+            )
+
         private fun resolveDefaultAuth(): FirebaseAuth? =
             try {
                 FirebaseAuth.getInstance()
@@ -66,12 +83,13 @@ class CloudSyncRepository(
             .map { snapshot ->
                 snapshot.documents
                     .mapNotNull { FirestoreSessionBackup.fromSnapshot(it) }
-                    .sortedByDescending { it.timestamp }
+                    .sortedByDescending { it.endTime.coerceAtLeast(it.timestamp) }
             }
     }
 
     suspend fun getDoubtById(userId: String, docId: String): Result<FirestoreDoubtBackup?> {
-        val docRef = doubtsCollection(userId).document(docId)
+        val safeDocId = ConversationSession.sanitizeCloudId(docId, "doubt")
+        val docRef = doubtsCollection(userId).document(safeDocId)
         return try {
             val snap = docRef.get().await()
             Result.success(FirestoreDoubtBackup.fromSnapshot(snap))
@@ -86,19 +104,23 @@ class CloudSyncRepository(
     suspend fun upsertDoubt(
         userId: String,
         item: DoubtItem,
-        docId: String = if (item.id > 0L) "doubt_${item.id}" else "doubt_${UUID.randomUUID()}"
+        docId: String = resolveDoubtCloudId(item)
     ): Result<String> {
-        val docRef = doubtsCollection(userId).document(docId)
+        val safeDocId = ConversationSession.sanitizeCloudId(docId, "doubt")
+        val docRef = doubtsCollection(userId).document(safeDocId)
         return try {
             val existingSnap = docRef.get().await()
-            val backup = FirestoreDoubtBackup.fromRoomEntity(item).copy(id = docId)
+            val backup = FirestoreDoubtBackup.fromRoomEntity(item).copy(
+                id = safeDocId,
+                cloudId = safeDocId
+            )
             val existingCreatedAt = existingSnap.getTimestamp("createdAt")
             if (existingSnap.exists() && existingCreatedAt != null) {
                 docRef.set(backup.toUpdateMap(existingCreatedAt)).await()
             } else {
                 docRef.set(backup.toCreateMap()).await()
             }
-            Result.success(docId)
+            Result.success(safeDocId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -108,7 +130,8 @@ class CloudSyncRepository(
     }
 
     suspend fun deleteDoubt(userId: String, docId: String): Result<Unit> {
-        val docRef = doubtsCollection(userId).document(docId)
+        val safeDocId = ConversationSession.sanitizeCloudId(docId, "doubt")
+        val docRef = doubtsCollection(userId).document(safeDocId)
         return try {
             docRef.delete().await()
             Result.success(Unit)
@@ -116,6 +139,69 @@ class CloudSyncRepository(
             throw e
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.DELETE, docRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun upsertSession(
+        userId: String,
+        session: ConversationSession,
+        docId: String = resolveSessionCloudId(session)
+    ): Result<String> {
+        val safeDocId = ConversationSession.sanitizeCloudId(docId, "session")
+        val docRef = sessionsCollection(userId).document(safeDocId)
+        return try {
+            val existingSnap = docRef.get().await()
+            val backup = FirestoreSessionBackup.fromRoomEntity(session).copy(
+                id = safeDocId,
+                cloudId = safeDocId
+            )
+            val existingCreatedAt = existingSnap.getTimestamp("createdAt")
+            if (existingSnap.exists() && existingCreatedAt != null) {
+                docRef.set(backup.toUpdateMap(existingCreatedAt)).await()
+            } else {
+                docRef.set(backup.toCreateMap()).await()
+            }
+            Result.success(safeDocId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.WRITE, docRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteSession(userId: String, docId: String): Result<Unit> {
+        val safeDocId = ConversationSession.sanitizeCloudId(docId, "session")
+        val docRef = sessionsCollection(userId).document(safeDocId)
+        return try {
+            docRef.delete().await()
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, docRef.path, auth)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchRawBackups(
+        userId: String
+    ): Result<Pair<List<FirestoreSessionBackup>, List<FirestoreDoubtBackup>>> {
+        val sessionsRef = sessionsCollection(userId)
+        val doubtsRef = doubtsCollection(userId)
+        return try {
+            val sessionBackups = sessionsRef.get().await().documents
+                .mapNotNull { FirestoreSessionBackup.fromSnapshot(it) }
+                .sortedByDescending { it.endTime.coerceAtLeast(it.timestamp) }
+            val doubtBackups = doubtsRef.get().await().documents
+                .mapNotNull { FirestoreDoubtBackup.fromSnapshot(it) }
+                .sortedByDescending { it.timestamp }
+            Result.success(sessionBackups to doubtBackups)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.LIST, "users/$userId", auth)
             Result.failure(e)
         }
     }
@@ -135,24 +221,17 @@ class CloudSyncRepository(
                 it.id to it.getTimestamp("createdAt")
             }
 
-            var doubtCount = 0
-            doubts.forEach { item ->
-                val docId = if (item.id > 0L) "doubt_${item.id}" else "doubt_${UUID.randomUUID()}"
-                val backup = FirestoreDoubtBackup.fromRoomEntity(item).copy(id = docId)
-                val existingCreatedAt = existingDoubts[docId]
-                val payload = if (existingCreatedAt != null) {
-                    backup.toUpdateMap(existingCreatedAt)
-                } else {
-                    backup.toCreateMap()
-                }
-                doubtsRef.document(docId).set(payload).await()
-                doubtCount++
+            val sessionCloudIdByLocalId = sessions.associate { session ->
+                session.id to resolveSessionCloudId(session)
             }
 
             var sessionCount = 0
             sessions.forEach { session ->
-                val docId = if (session.id > 0L) "session_${session.id}" else "session_${UUID.randomUUID()}"
-                val backup = FirestoreSessionBackup.fromRoomEntity(session).copy(id = docId)
+                val docId = resolveSessionCloudId(session)
+                val backup = FirestoreSessionBackup.fromRoomEntity(session).copy(
+                    id = docId,
+                    cloudId = docId
+                )
                 val existingCreatedAt = existingSessions[docId]
                 val payload = if (existingCreatedAt != null) {
                     backup.toUpdateMap(existingCreatedAt)
@@ -161,6 +240,30 @@ class CloudSyncRepository(
                 }
                 sessionsRef.document(docId).set(payload).await()
                 sessionCount++
+            }
+
+            var doubtCount = 0
+            doubts.forEach { item ->
+                val docId = resolveDoubtCloudId(item)
+                val resolvedSessionCloudId = item.sessionCloudId
+                    .takeIf { it.isNotBlank() && isValidCloudId(it) }
+                    ?: sessionCloudIdByLocalId[item.sessionId]
+                    ?: ""
+                val backup = FirestoreDoubtBackup.fromRoomEntity(
+                    item.copy(sessionCloudId = resolvedSessionCloudId)
+                ).copy(
+                    id = docId,
+                    cloudId = docId,
+                    sessionCloudId = resolvedSessionCloudId
+                )
+                val existingCreatedAt = existingDoubts[docId]
+                val payload = if (existingCreatedAt != null) {
+                    backup.toUpdateMap(existingCreatedAt)
+                } else {
+                    backup.toCreateMap()
+                }
+                doubtsRef.document(docId).set(payload).await()
+                doubtCount++
             }
 
             Result.success(CloudBackupSummary(uploadedDoubts = doubtCount, uploadedSessions = sessionCount))
@@ -173,21 +276,11 @@ class CloudSyncRepository(
     }
 
     suspend fun restoreAll(userId: String): Result<CloudRestoreResult> {
-        val doubtsRef = doubtsCollection(userId)
-        val sessionsRef = sessionsCollection(userId)
-        return try {
-            val doubtDocs = doubtsRef.get().await().documents
-                .mapNotNull { FirestoreDoubtBackup.fromSnapshot(it)?.toRoomEntity() }
-                .sortedByDescending { it.timestamp }
-            val sessionDocs = sessionsRef.get().await().documents
-                .mapNotNull { FirestoreSessionBackup.fromSnapshot(it)?.toRoomEntity() }
-                .sortedByDescending { it.endTime }
-            Result.success(CloudRestoreResult(doubts = doubtDocs, sessions = sessionDocs))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.LIST, "users/$userId/doubts", auth)
-            Result.failure(e)
+        return fetchRawBackups(userId).map { (sessionBackups, doubtBackups) ->
+            CloudRestoreResult(
+                doubts = doubtBackups.map { it.toRoomEntity() },
+                sessions = sessionBackups.map { it.toRoomEntity() }
+            )
         }
     }
 }

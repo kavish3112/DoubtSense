@@ -2,6 +2,7 @@ package com.example.data.model
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import java.util.UUID
 
 /**
  * Represents a single external verification source attached when Fact-Checking Mode is enabled.
@@ -56,7 +57,12 @@ data class DoubtItem(
 
     // Custom Category Tags & One-Sentence Summary
     val customTag: String = "Education",
-    val oneSentenceSummary: String = ""
+    val oneSentenceSummary: String = "",
+
+    // Cross-device Firestore sync identifiers
+    val cloudId: String = newCloudId(),
+    val sessionCloudId: String = "",
+    val updatedAtMillis: Long = System.currentTimeMillis()
 ) {
     /**
      * Parses external verification sources in pure Kotlin (safe for JVM unit tests).
@@ -87,6 +93,8 @@ data class DoubtItem(
     }
 
     companion object {
+        fun newCloudId(): String = ConversationSession.newCloudId("doubt")
+
         fun encodeVerificationSources(sources: List<VerificationSource>): String {
             if (sources.isEmpty()) return "[]"
             return "[" + sources.joinToString(",") { src ->

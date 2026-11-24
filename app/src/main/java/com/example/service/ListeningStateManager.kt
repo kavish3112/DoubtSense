@@ -16,6 +16,7 @@ import com.example.audio.VoiceCaptureListener
 import com.example.data.local.DoubtDatabase
 import com.example.data.model.ConversationSession
 import com.example.data.model.DoubtItem
+import com.example.data.remote.CloudSyncManager
 import com.example.data.repository.DoubtRepository
 import com.example.util.NotificationHelper
 import com.example.util.TtsManager
@@ -274,10 +275,12 @@ object ListeningStateManager {
     fun initRepository(context: Context) {
         if (repository == null) {
             val db = DoubtDatabase.getInstance(context)
-            repository = DoubtRepository(db.doubtDao(), db.conversationSessionDao())
+            val created = DoubtRepository(db.doubtDao(), db.conversationSessionDao())
+            repository = created
             val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             _factCheckingMode.value = prefs.getBoolean(KEY_FACT_CHECKING_MODE, false)
         }
+        repository?.let { CloudSyncManager.attachRepository(context, it) }
     }
 
     fun getRepository(context: Context): DoubtRepository {
@@ -590,6 +593,58 @@ object ListeningStateManager {
         _activeSessionId.value = null
         resetSessionMetrics()
         updateUncertainty(0f, "Idle / Clear")
+    }
+
+    /**
+     * Loads a synced/saved ConversationSession and its linked doubts back into the Live Sense
+     * chat timeline so users can continue conversations seamlessly across devices.
+     */
+    fun restoreSessionIntoLiveChat(
+        session: ConversationSession,
+        sessionDoubts: List<DoubtItem>
+    ) {
+        val turns = session.getTranscriptTurns()
+        _activeSessionId.value = session.id.takeIf { it > 0L }
+        activeSessionStartTime = session.startTime.takeIf { it > 0L } ?: System.currentTimeMillis()
+        sessionTitle = session.title.ifBlank { "Conversation Session" }
+        sessionCategory = session.category.ifBlank { "General" }
+        sessionDoubtCount = session.doubtCount.coerceAtLeast(sessionDoubts.size)
+        sessionIntensitySamples.clear()
+        if (session.averageDoubtIntensity > 0f) {
+            sessionIntensitySamples.add(session.averageDoubtIntensity.coerceIn(0f, 1f))
+        }
+        if (session.peakDoubtIntensity > 0f) {
+            sessionIntensitySamples.add(session.peakDoubtIntensity.coerceIn(0f, 1f))
+        }
+
+        _conversationHistory.value = turns.takeLast(25)
+        _liveChatTurns.value = turns.takeLast(25).map { text ->
+            val matchedDoubt = sessionDoubts.firstOrNull { doubt ->
+                doubt.doubtSnippet.equals(text, ignoreCase = true) ||
+                    text.contains(doubt.doubtSnippet, ignoreCase = true)
+            }
+            val score = matchedDoubt?.confidenceScore ?: calculateRealtimeUncertainty(text)
+            val highlight = when {
+                matchedDoubt != null && matchedDoubt.isAmbiguous -> ChatTurnHighlightState.AMBIGUOUS_DOUBT
+                matchedDoubt != null -> ChatTurnHighlightState.DOUBT_CONFIRMED
+                score >= 0.45f -> ChatTurnHighlightState.UNCERTAIN_LIVE
+                else -> ChatTurnHighlightState.NEUTRAL
+            }
+            LiveChatTurn(
+                id = turnIdGenerator.getAndIncrement(),
+                text = text,
+                timestamp = matchedDoubt?.timestamp ?: session.endTime,
+                uncertaintyScore = score,
+                highlightState = highlight,
+                doubtId = matchedDoubt?.id,
+                doubtTopic = matchedDoubt?.topic,
+                subject = matchedDoubt?.subject
+            )
+        }
+        val latest = sessionDoubts.maxByOrNull { it.timestamp }
+        _latestDetectedDoubt.value = latest
+        _liveDoubtAlert.value = null
+        _statusMessage.value = "Loaded session \"${sessionTitle}\" (${turns.size} turns)"
     }
 
     /**

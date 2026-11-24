@@ -2,6 +2,7 @@ package com.example.data.model
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import java.util.UUID
 
 /**
  * Represents a persisted listening/conversation session stored in the local Room database,
@@ -22,7 +23,9 @@ data class ConversationSession(
     val doubtCount: Int = 0,
     val summary: String = "",
     val customTag: String = "General",
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    val cloudId: String = newCloudId(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
 ) {
     /**
      * Parses the stored JSON-serialized conversation turns in pure Kotlin (safe for JVM unit tests).
@@ -98,6 +101,23 @@ data class ConversationSession(
                     .replace("\t", "\\t")
                 "\"$escaped\""
             } + "]"
+        }
+
+        private val CLOUD_ID_REGEX = Regex("^[a-zA-Z0-9_\\-]{1,128}$")
+
+        fun newCloudId(prefix: String = "session"): String {
+            val safePrefix = prefix.replace(Regex("[^a-zA-Z0-9_\\-]"), "").ifBlank { "session" }
+            val token = UUID.randomUUID().toString().replace("-", "").take(16)
+            return "${safePrefix}_$token"
+        }
+
+        fun isValidCloudId(raw: String): Boolean = CLOUD_ID_REGEX.matches(raw)
+
+        fun sanitizeCloudId(raw: String, fallbackPrefix: String = "session"): String {
+            val trimmed = raw.trim()
+            if (isValidCloudId(trimmed)) return trimmed
+            val cleaned = trimmed.replace(Regex("[^a-zA-Z0-9_\\-]"), "_").trim('_').take(120)
+            return if (cleaned.isNotBlank() && isValidCloudId(cleaned)) cleaned else newCloudId(fallbackPrefix)
         }
     }
 }

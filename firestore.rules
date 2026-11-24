@@ -28,26 +28,53 @@ service cloud.firestore {
 
     function isValidDoubtBackup(data) {
       return data.localId is int && data.localId >= 0 &&
+             (!('cloudId' in data) || isValidId(data.cloudId)) &&
+             (!('sessionCloudId' in data) || (data.sessionCloudId is string && data.sessionCloudId.size() <= 128 && (data.sessionCloudId.size() == 0 || isValidId(data.sessionCloudId)))) &&
              data.query is string && data.query.size() >= 1 && data.query.size() <= 2000 &&
              data.summary is string && data.summary.size() <= 10000 &&
              (!('oneSentenceSummary' in data) || (data.oneSentenceSummary is string && data.oneSentenceSummary.size() <= 500)) &&
              data.category is string && data.category.size() >= 1 && data.category.size() <= 60 &&
-             (!('customTag' in data) || (data.customTag is string && data.customTag.size() <= 60)) &&
+             (!('subject' in data) || (data.subject is string && data.subject.size() <= 60)) &&
+             (!('customTag' in data) || (data.customTag is string && data.customTag.size() <= 120)) &&
              data.timestamp is int && data.timestamp >= 0 &&
              data.isResolved is bool &&
              data.isStarred is bool &&
              data.confidenceScore is number && data.confidenceScore >= 0.0 && data.confidenceScore <= 1.0 &&
-             data.followUpCount is int && data.followUpCount >= 0;
+             data.followUpCount is int && data.followUpCount >= 0 &&
+             (!('quickAnswer' in data) || (data.quickAnswer is string && data.quickAnswer.size() <= 4000)) &&
+             (!('notificationSummary' in data) || (data.notificationSummary is string && data.notificationSummary.size() <= 1000)) &&
+             (!('conversationalContext' in data) || (data.conversationalContext is string && data.conversationalContext.size() <= 4000)) &&
+             (!('importantConcepts' in data) || (data.importantConcepts is string && data.importantConcepts.size() <= 1000)) &&
+             (!('doubtType' in data) || (data.doubtType is string && data.doubtType.size() <= 120)) &&
+             (!('intent' in data) || (data.intent is string && data.intent.size() <= 1000)) &&
+             (!('isAmbiguous' in data) || data.isAmbiguous is bool) &&
+             (!('clarificationQuestion' in data) || (data.clarificationQuestion is string && data.clarificationQuestion.size() <= 1000)) &&
+             (!('suggestedOptionsJson' in data) || (data.suggestedOptionsJson is string && data.suggestedOptionsJson.size() <= 2000)) &&
+             (!('referenceMaterials' in data) || (data.referenceMaterials is string && data.referenceMaterials.size() <= 2000)) &&
+             (!('conversationSuggestions' in data) || (data.conversationSuggestions is string && data.conversationSuggestions.size() <= 2000)) &&
+             (!('isFactChecked' in data) || data.isFactChecked is bool) &&
+             (!('verificationStatus' in data) || (data.verificationStatus is string && data.verificationStatus.size() <= 500)) &&
+             (!('verificationSourcesJson' in data) || (data.verificationSourcesJson is string && data.verificationSourcesJson.size() <= 10000)) &&
+             (!('updatedAtMillis' in data) || (data.updatedAtMillis is int && data.updatedAtMillis >= 0));
     }
 
     function isValidSessionBackup(data) {
       return data.localId is int && data.localId >= 0 &&
+             (!('cloudId' in data) || isValidId(data.cloudId)) &&
              data.title is string && data.title.size() >= 1 && data.title.size() <= 300 &&
              data.answerJson is string && data.answerJson.size() >= 1 && data.answerJson.size() <= 40000 &&
-             (!('customTag' in data) || (data.customTag is string && data.customTag.size() <= 60)) &&
+             (!('customTag' in data) || (data.customTag is string && data.customTag.size() <= 120)) &&
              (!('category' in data) || (data.category is string && data.category.size() <= 60)) &&
              data.isPinned is bool &&
-             data.timestamp is int && data.timestamp >= 0;
+             data.timestamp is int && data.timestamp >= 0 &&
+             (!('startTime' in data) || (data.startTime is int && data.startTime >= 0)) &&
+             (!('endTime' in data) || (data.endTime is int && data.endTime >= 0)) &&
+             (!('transcriptPreview' in data) || (data.transcriptPreview is string && data.transcriptPreview.size() <= 1000)) &&
+             (!('averageDoubtIntensity' in data) || (data.averageDoubtIntensity is number && data.averageDoubtIntensity >= 0.0 && data.averageDoubtIntensity <= 1.0)) &&
+             (!('peakDoubtIntensity' in data) || (data.peakDoubtIntensity is number && data.peakDoubtIntensity >= 0.0 && data.peakDoubtIntensity <= 1.0)) &&
+             (!('doubtCount' in data) || (data.doubtCount is int && data.doubtCount >= 0)) &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() <= 2000)) &&
+             (!('updatedAtMillis' in data) || (data.updatedAtMillis is int && data.updatedAtMillis >= 0));
     }
 
     match /users/{userId}/doubts/{doubtId} {
@@ -62,10 +89,16 @@ service cloud.firestore {
                          'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
-                         'localId', 'query', 'summary', 'oneSentenceSummary',
-                         'category', 'customTag', 'timestamp', 'isResolved',
-                         'isStarred', 'confidenceScore', 'followUpCount',
-                         'createdAt', 'updatedAt'
+                         'localId', 'cloudId', 'sessionCloudId', 'query', 'summary',
+                         'oneSentenceSummary', 'category', 'subject', 'customTag',
+                         'timestamp', 'isResolved', 'isStarred', 'confidenceScore',
+                         'followUpCount', 'quickAnswer', 'notificationSummary',
+                         'conversationalContext', 'importantConcepts', 'doubtType',
+                         'intent', 'isAmbiguous', 'clarificationQuestion',
+                         'suggestedOptionsJson', 'referenceMaterials',
+                         'conversationSuggestions', 'isFactChecked',
+                         'verificationStatus', 'verificationSourcesJson',
+                         'updatedAtMillis', 'createdAt', 'updatedAt'
                        ]) &&
                        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
@@ -77,9 +110,16 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
-                         'localId', 'query', 'summary', 'oneSentenceSummary',
-                         'category', 'customTag', 'timestamp', 'isResolved',
-                         'isStarred', 'confidenceScore', 'followUpCount', 'updatedAt'
+                         'localId', 'cloudId', 'sessionCloudId', 'query', 'summary',
+                         'oneSentenceSummary', 'category', 'subject', 'customTag',
+                         'timestamp', 'isResolved', 'isStarred', 'confidenceScore',
+                         'followUpCount', 'quickAnswer', 'notificationSummary',
+                         'conversationalContext', 'importantConcepts', 'doubtType',
+                         'intent', 'isAmbiguous', 'clarificationQuestion',
+                         'suggestedOptionsJson', 'referenceMaterials',
+                         'conversationSuggestions', 'isFactChecked',
+                         'verificationStatus', 'verificationSourcesJson',
+                         'updatedAtMillis', 'updatedAt'
                        ]);
 
       allow delete: if isOwner(userId) && isValidId(doubtId);
@@ -96,8 +136,11 @@ service cloud.firestore {
                          'timestamp', 'createdAt', 'updatedAt'
                        ]) &&
                        incoming().keys().hasOnly([
-                         'localId', 'title', 'answerJson', 'customTag',
-                         'category', 'isPinned', 'timestamp', 'createdAt', 'updatedAt'
+                         'localId', 'cloudId', 'title', 'answerJson', 'customTag',
+                         'category', 'isPinned', 'timestamp', 'startTime', 'endTime',
+                         'transcriptPreview', 'averageDoubtIntensity',
+                         'peakDoubtIntensity', 'doubtCount', 'summary',
+                         'updatedAtMillis', 'createdAt', 'updatedAt'
                        ]) &&
                        incoming().createdAt is timestamp && incoming().createdAt <= request.time &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
@@ -109,8 +152,11 @@ service cloud.firestore {
                        incoming().createdAt == existing().createdAt &&
                        incoming().updatedAt is timestamp && incoming().updatedAt <= request.time &&
                        incoming().diff(existing()).affectedKeys().hasOnly([
-                         'localId', 'title', 'answerJson', 'customTag',
-                         'category', 'isPinned', 'timestamp', 'updatedAt'
+                         'localId', 'cloudId', 'title', 'answerJson', 'customTag',
+                         'category', 'isPinned', 'timestamp', 'startTime', 'endTime',
+                         'transcriptPreview', 'averageDoubtIntensity',
+                         'peakDoubtIntensity', 'doubtCount', 'summary',
+                         'updatedAtMillis', 'updatedAt'
                        ]);
 
       allow delete: if isOwner(userId) && isValidId(sessionId);
